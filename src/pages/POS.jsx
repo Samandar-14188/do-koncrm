@@ -215,6 +215,8 @@ export default function POS() {
       costPrice: it.product.costPrice,
       sellPrice: it.product.sellPrice,
       bargainPrice: Number(it.bargainPrice !== undefined && it.bargainPrice !== '' ? it.bargainPrice : it.product.sellPrice),
+      supplierId: it.product.supplierId || null,
+      supplierName: it.product.supplierName || '',
     }));
 
     const result = processSale({

@@ -52,7 +52,21 @@ export async function syncToCloud(tableName, records) {
     const { data, error } = await supabaseClient
       .from(tableName)
       .upsert(rows, { onConflict: 'id' });
-    if (error) console.error(`Sync to ${tableName} error:`, error);
+    
+    // For suppliers, also backup to settings table for seamless fallback
+    if (tableName === 'suppliers') {
+      try {
+        await supabaseClient.from('settings').upsert([{
+          id: 'store_suppliers',
+          data: records,
+          updated_at: new Date().toISOString()
+        }], { onConflict: 'id' });
+      } catch (_) {}
+    }
+
+    if (error && tableName !== 'suppliers') {
+      console.error(`Sync to ${tableName} error:`, error);
+    }
     return { data, error };
   } catch (e) {
     console.error('syncToCloud error:', e);
@@ -68,8 +82,25 @@ export async function syncFromCloud(tableName) {
       .from(tableName)
       .select('*')
       .order('updated_at', { ascending: false });
+    
+    // Fallback for suppliers if table not created yet in schema cache
+    if (tableName === 'suppliers' && (error || !data || data.length === 0)) {
+      try {
+        const res = await supabaseClient
+          .from('settings')
+          .select('*')
+          .eq('id', 'store_suppliers')
+          .maybeSingle();
+        if (res.data && Array.isArray(res.data.data)) {
+          return res.data.data;
+        }
+      } catch (_) {}
+    }
+
     if (error) {
-      console.error(`Sync from ${tableName} error:`, error);
+      if (tableName !== 'suppliers') {
+        console.error(`Sync from ${tableName} error:`, error);
+      }
       return [];
     }
     return (data || []).map(r => r.data);
@@ -143,6 +174,7 @@ export async function clearCloudTables() {
       supabaseClient.from('products').delete().neq('id', ''),
       supabaseClient.from('debtors').delete().neq('id', ''),
       supabaseClient.from('sales').delete().neq('id', ''),
+      supabaseClient.from('suppliers').delete().neq('id', ''),
       supabaseClient.from('settings').delete().neq('id', 'auth_passwords'),
     ]);
     return { success: true };

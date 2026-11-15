@@ -13,17 +13,29 @@ import {
   X,
   RotateCw,
   CheckCircle2,
-  Boxes
+  Boxes,
+  Truck,
+  Building2,
+  Phone
 } from 'lucide-react';
 
 export default function Inventory() {
   const { t, transliterate } = useLanguage();
   const { isAdmin } = useAuth();
-  const { products, addProduct, updateProduct, deleteProduct, restockProduct } = useApp();
+  const {
+    products,
+    addProduct,
+    updateProduct,
+    deleteProduct,
+    restockProduct,
+    suppliers,
+    addSupplier
+  } = useApp();
 
   // Filters & Search
   const [searchQuery, setSearchQuery] = useState('');
   const [stockFilter, setStockFilter] = useState('all'); // 'all', 'low', 'out'
+  const [selectedSupplierFilter, setSelectedSupplierFilter] = useState('all');
 
   // Modal States
   const [isAddEditOpen, setIsAddEditOpen] = useState(false);
@@ -34,6 +46,13 @@ export default function Inventory() {
   const [restockQty, setRestockQty] = useState('');
   const [restockCost, setRestockCost] = useState('');
   const [restockSell, setRestockSell] = useState('');
+  const [restockSupplierId, setRestockSupplierId] = useState('');
+  const [restockPaymentMode, setRestockPaymentMode] = useState('cash'); // 'cash' or 'credit'
+
+  // Quick Add Supplier Modal
+  const [isAddSupplierOpen, setIsAddSupplierOpen] = useState(false);
+  const [newSupplierName, setNewSupplierName] = useState('');
+  const [newSupplierPhone, setNewSupplierPhone] = useState('');
 
   const [deleteConfirmId, setDeleteConfirmId] = useState(null);
   const [toastMessage, setToastMessage] = useState('');
@@ -45,12 +64,26 @@ export default function Inventory() {
     costPrice: '',
     sellPrice: '',
     quantity: '',
+    supplierId: '',
+    supplierName: '',
+    purchasePaymentMode: 'cash', // 'cash' or 'credit'
   });
 
   const showToast = (msg) => {
     setToastMessage(msg);
     setTimeout(() => setToastMessage(''), 3000);
   };
+
+  // Stock cost map per supplier for the top filter pills
+  const supplierStockMap = useMemo(() => {
+    const map = {};
+    products.forEach((p) => {
+      if (p.supplierId) {
+        map[p.supplierId] = (map[p.supplierId] || 0) + (Number(p.costPrice || 0) * Number(p.quantity || 0));
+      }
+    });
+    return map;
+  }, [products]);
 
   // Filtered Products
   const filteredProducts = useMemo(() => {
@@ -63,11 +96,16 @@ export default function Inventory() {
 
       if (!matchSearch) return false;
 
-      if (stockFilter === 'out') return Number(p.quantity) <= 0;
-      if (stockFilter === 'low') return Number(p.quantity) > 0 && Number(p.quantity) <= 5;
+      if (stockFilter === 'out' && Number(p.quantity) > 0) return false;
+      if (stockFilter === 'low' && (Number(p.quantity) <= 0 || Number(p.quantity) > 5)) return false;
+
+      if (selectedSupplierFilter !== 'all' && p.supplierId !== selectedSupplierFilter) {
+        return false;
+      }
+
       return true;
     });
-  }, [products, searchQuery, stockFilter]);
+  }, [products, searchQuery, stockFilter, selectedSupplierFilter]);
 
   // Open Add Modal
   const handleOpenAdd = () => {
@@ -78,6 +116,9 @@ export default function Inventory() {
       costPrice: '',
       sellPrice: '',
       quantity: '',
+      supplierId: suppliers[0]?.id || '',
+      supplierName: suppliers[0]?.name || '',
+      purchasePaymentMode: 'cash',
     });
     setIsAddEditOpen(true);
   };
@@ -91,6 +132,9 @@ export default function Inventory() {
       costPrice: isAdmin ? (p.costPrice || '') : '',
       sellPrice: p.sellPrice || '',
       quantity: p.quantity,
+      supplierId: p.supplierId || '',
+      supplierName: p.supplierName || '',
+      purchasePaymentMode: 'cash',
     });
     setIsAddEditOpen(true);
   };
@@ -101,13 +145,49 @@ export default function Inventory() {
     setRestockQty('');
     setRestockCost(isAdmin ? (p.costPrice || '') : '');
     setRestockSell(p.sellPrice || '');
+    setRestockSupplierId(p.supplierId || suppliers[0]?.id || '');
+    setRestockPaymentMode('cash');
     setIsRestockOpen(true);
+  };
+
+  // Quick save new supplier
+  const handleSaveNewSupplier = (e) => {
+    e.preventDefault();
+    if (!newSupplierName.trim()) return;
+
+    const created = addSupplier({
+      name: newSupplierName.trim(),
+      phone: newSupplierPhone.trim(),
+    });
+
+    // Automatically select the new supplier in the open form
+    if (isAddEditOpen) {
+      setFormData((prev) => ({
+        ...prev,
+        supplierId: created.id,
+        supplierName: created.name,
+      }));
+    }
+    if (isRestockOpen) {
+      setRestockSupplierId(created.id);
+    }
+
+    setNewSupplierName('');
+    setNewSupplierPhone('');
+    setIsAddSupplierOpen(false);
+    showToast(t('supplier_added'));
   };
 
   // Submit Add or Edit
   const handleSaveProduct = (e) => {
     e.preventDefault();
     if (!formData.name.trim() || !formData.sellPrice) return;
+    if (isAdmin && !formData.costPrice) {
+      alert("Tan narxini kiritish majburiy!");
+      return;
+    }
+
+    const selectedSup = suppliers.find((s) => s.id === formData.supplierId);
 
     if (editingProduct) {
       updateProduct(editingProduct.id, {
@@ -117,6 +197,8 @@ export default function Inventory() {
         costPrice: isAdmin ? (Number(formData.costPrice) || 0) : editingProduct.costPrice,
         sellPrice: Number(formData.sellPrice) || 0,
         quantity: Number(formData.quantity) || 0,
+        supplierId: formData.supplierId || null,
+        supplierName: selectedSup ? selectedSup.name : (formData.supplierName || ''),
       });
       showToast(t('product_updated'));
     } else {
@@ -126,6 +208,9 @@ export default function Inventory() {
         costPrice: isAdmin ? (Number(formData.costPrice) || 0) : 0,
         sellPrice: Number(formData.sellPrice) || 0,
         quantity: Number(formData.quantity) || 0,
+        supplierId: formData.supplierId || null,
+        supplierName: selectedSup ? selectedSup.name : '',
+        purchasePaymentMode: formData.purchasePaymentMode || 'cash',
       });
       showToast(t('product_added'));
     }
@@ -137,12 +222,23 @@ export default function Inventory() {
   const handleSaveRestock = (e) => {
     e.preventDefault();
     if (!restockItem || !restockQty || Number(restockQty) <= 0) return;
+    if (isAdmin && !restockCost) {
+      alert("Yangi tan narxini kiritish majburiy!");
+      return;
+    }
+
+    const selectedSup = suppliers.find((s) => s.id === restockSupplierId);
 
     restockProduct(
       restockItem.id,
       Number(restockQty),
       isAdmin && restockCost !== '' ? Number(restockCost) : restockItem.costPrice,
-      restockSell !== '' ? Number(restockSell) : restockItem.sellPrice
+      restockSell !== '' ? Number(restockSell) : restockItem.sellPrice,
+      {
+        supplierId: restockSupplierId || null,
+        supplierName: selectedSup ? selectedSup.name : '',
+        purchasePaymentMode: restockPaymentMode || 'cash',
+      }
     );
 
     showToast(t('product_restocked'));
@@ -166,7 +262,7 @@ export default function Inventory() {
         </div>
       )}
 
-      {/* Header and Add Button - responsive and min-w-0 */}
+      {/* Header and Add Button */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 min-w-0">
         <div className="min-w-0">
           <h1 className="text-xl sm:text-2xl font-black text-gray-900 tracking-tight flex items-center gap-2 truncate">
@@ -178,14 +274,64 @@ export default function Inventory() {
           </p>
         </div>
 
-        <button
-          onClick={handleOpenAdd}
-          className="btn-primary flex items-center justify-center gap-2 py-2.5 sm:py-3 px-4 sm:px-5 text-sm font-bold rounded-2xl shadow-md shadow-blue-500/20 active:scale-95 whitespace-nowrap flex-shrink-0"
-        >
-          <Plus className="w-4 h-4 stroke-[3]" />
-          <span>{t('add_product')}</span>
-        </button>
+        <div className="flex items-center gap-2 self-start sm:self-auto flex-shrink-0">
+          <button
+            onClick={handleOpenAdd}
+            className="btn-primary flex items-center justify-center gap-2 py-2.5 sm:py-3 px-4 sm:px-5 text-sm font-bold rounded-2xl shadow-md shadow-blue-500/20 active:scale-95 whitespace-nowrap"
+          >
+            <Plus className="w-4 h-4 stroke-[3]" />
+            <span>{t('add_product')}</span>
+          </button>
+        </div>
       </div>
+
+      {/* Supplier Filter Pills */}
+      {suppliers.length > 0 && (
+        <div className="bg-white rounded-2xl p-3 shadow-sm border border-gray-200/80 min-w-0">
+          <div className="flex items-center gap-1.5 overflow-x-auto pb-1 text-xs scrollbar-thin">
+            <span className="text-[11px] font-bold text-gray-500 uppercase tracking-wider flex-shrink-0 mr-1 flex items-center gap-1">
+              <Truck className="w-3.5 h-3.5 text-blue-600" />
+              <span>{t('supplier')}:</span>
+            </span>
+
+            <button
+              onClick={() => setSelectedSupplierFilter('all')}
+              className={`px-3 py-1.5 rounded-xl font-bold whitespace-nowrap transition-colors ${
+                selectedSupplierFilter === 'all'
+                  ? 'bg-slate-900 text-white shadow-sm'
+                  : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+              }`}
+            >
+              {t('all_suppliers')} ({products.length})
+            </button>
+
+            {suppliers.map((s) => {
+              const stockVal = supplierStockMap[s.id] || 0;
+              const isSelected = selectedSupplierFilter === s.id;
+              return (
+                <button
+                  key={s.id}
+                  onClick={() => setSelectedSupplierFilter(s.id)}
+                  className={`px-3 py-1.5 rounded-xl font-semibold whitespace-nowrap transition-all flex items-center gap-1.5 ${
+                    isSelected
+                      ? 'bg-blue-600 text-white shadow-sm ring-2 ring-blue-300'
+                      : 'bg-gray-50 border border-gray-200 text-gray-700 hover:bg-gray-100'
+                  }`}
+                >
+                  <span>{transliterate(s.name)}</span>
+                  <span
+                    className={`text-[10px] font-mono px-1.5 py-0.5 rounded-md font-bold ${
+                      isSelected ? 'bg-blue-800 text-white' : 'bg-purple-100 text-purple-800'
+                    }`}
+                  >
+                    {formatUZS(stockVal)}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       {/* Search & Stock Filter Tabs */}
       <div className="bg-white rounded-2xl p-3 shadow-sm border border-gray-200/80 space-y-3 min-w-0">
@@ -242,7 +388,7 @@ export default function Inventory() {
         </div>
       </div>
 
-      {/* Product List: grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 */}
+      {/* Product List */}
       {filteredProducts.length === 0 ? (
         <div className="bg-white rounded-2xl border border-gray-200 p-12 text-center">
           <Package className="w-12 h-12 text-gray-300 mx-auto mb-3" />
@@ -272,11 +418,18 @@ export default function Inventory() {
                       <h3 className="font-bold text-gray-900 text-sm leading-snug break-words">
                         {transliterate(p.name)}
                       </h3>
-                      {p.artikul && (
-                        <span className="inline-block text-[11px] font-mono text-gray-500 bg-gray-100 px-2 py-0.5 rounded-md mt-1 truncate max-w-full">
-                          {p.artikul}
-                        </span>
-                      )}
+                      <div className="flex flex-wrap items-center gap-1 mt-1">
+                        {p.artikul && (
+                          <span className="inline-block text-[11px] font-mono text-gray-500 bg-gray-100 px-2 py-0.5 rounded-md truncate max-w-full">
+                            {p.artikul}
+                          </span>
+                        )}
+                        {p.supplierName && (
+                          <span className="inline-block text-[10px] font-semibold text-blue-700 bg-blue-50 px-2 py-0.5 rounded-md truncate max-w-full">
+                            {transliterate(p.supplierName)}
+                          </span>
+                        )}
+                      </div>
                     </div>
 
                     {/* Stock Status Badge */}
@@ -350,7 +503,7 @@ export default function Inventory() {
         </div>
       )}
 
-      {/* Add / Edit Product Modal - Protects Cost Price from Seller */}
+      {/* Add / Edit Product Modal */}
       {isAddEditOpen && (
         <div className="modal-overlay">
           <div className="modal-content max-w-md p-6">
@@ -394,21 +547,90 @@ export default function Inventory() {
                 />
               </div>
 
-              {/* Cost Price & Selling Price Fields */}
+              {/* Supplier Selection */}
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="block text-xs font-semibold text-gray-700">
+                    {t('supplier')}
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => setIsAddSupplierOpen(true)}
+                    className="text-[11px] font-bold text-blue-600 hover:text-blue-800"
+                  >
+                    {t('add_new_supplier')}
+                  </button>
+                </div>
+                <select
+                  value={formData.supplierId}
+                  onChange={(e) => {
+                    const sup = suppliers.find((s) => s.id === e.target.value);
+                    setFormData({
+                      ...formData,
+                      supplierId: e.target.value,
+                      supplierName: sup ? sup.name : '',
+                    });
+                  }}
+                  className="input-field text-xs"
+                >
+                  <option value="">{t('supplier_select')}</option>
+                  {suppliers.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.name} {s.phone ? `(${s.phone})` : ''}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Incoming Stock Payment Mode Toggle (Only when adding with selected supplier) */}
+              {formData.supplierId && !editingProduct && (
+                <div className="bg-blue-50/70 border border-blue-100 rounded-2xl p-3 space-y-2">
+                  <label className="block text-xs font-bold text-blue-900">
+                    {t('purchase_payment_mode')}
+                  </label>
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setFormData({ ...formData, purchasePaymentMode: 'cash' })}
+                      className={`py-2 px-3 rounded-xl border text-xs font-bold transition-all ${
+                        formData.purchasePaymentMode === 'cash'
+                          ? 'bg-emerald-600 text-white border-emerald-600 shadow-sm'
+                          : 'bg-white border-gray-200 text-gray-700 hover:bg-gray-50'
+                      }`}
+                    >
+                      {t('paid_cash_supplier')}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setFormData({ ...formData, purchasePaymentMode: 'credit' })}
+                      className={`py-2 px-3 rounded-xl border text-xs font-bold transition-all ${
+                        formData.purchasePaymentMode === 'credit'
+                          ? 'bg-red-600 text-white border-red-600 shadow-sm'
+                          : 'bg-white border-gray-200 text-gray-700 hover:bg-gray-50'
+                      }`}
+                    >
+                      {t('paid_credit_supplier')}
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Cost Price & Selling Price Fields - MANDATORY FOR ADMIN */}
               {isAdmin ? (
                 <div className="grid grid-cols-2 gap-3">
                   <div>
                     <label className="block text-xs font-semibold text-purple-700 mb-1">
-                      {t('cost_price')} (so'm)
+                      {t('cost_price')} (so'm) *
                     </label>
                     <input
                       type="number"
                       step="any"
                       min="0"
+                      required
                       placeholder="95000"
                       value={formData.costPrice}
                       onChange={(e) => setFormData({ ...formData, costPrice: e.target.value })}
-                      className="input-field border-purple-200 focus:border-purple-500"
+                      className="input-field border-purple-200 focus:border-purple-500 font-semibold"
                     />
                   </div>
                   <div>
@@ -460,9 +682,6 @@ export default function Inventory() {
                   onChange={(e) => setFormData({ ...formData, quantity: e.target.value })}
                   className="input-field"
                 />
-                <p className="text-[11px] text-gray-400 mt-1">
-                  Moy va antifrizlar uchun o'nlik kasr (masalan: 4.5 litr) kiritish mumkin.
-                </p>
               </div>
 
               <div className="flex items-center justify-end gap-2 pt-3 border-t border-gray-100">
@@ -482,7 +701,7 @@ export default function Inventory() {
         </div>
       )}
 
-      {/* Restock Modal - Tan narxi is completely hidden from Seller */}
+      {/* Restock Modal */}
       {isRestockOpen && restockItem && (
         <div className="modal-overlay">
           <div className="modal-content max-w-sm p-6">
@@ -527,19 +746,81 @@ export default function Inventory() {
                 />
               </div>
 
-              {/* Price updates on restock: Cost Price is ONLY shown to Admin */}
+              {/* Supplier Selection in Restock */}
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="block text-xs font-semibold text-gray-700">
+                    {t('supplier')}
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => setIsAddSupplierOpen(true)}
+                    className="text-[11px] font-bold text-blue-600 hover:text-blue-800"
+                  >
+                    {t('add_new_supplier')}
+                  </button>
+                </div>
+                <select
+                  value={restockSupplierId}
+                  onChange={(e) => setRestockSupplierId(e.target.value)}
+                  className="input-field text-xs"
+                >
+                  <option value="">{t('supplier_select')}</option>
+                  {suppliers.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Payment toggle if supplier chosen */}
+              {restockSupplierId && (
+                <div className="bg-blue-50/70 border border-blue-100 rounded-2xl p-2.5 space-y-1.5">
+                  <label className="block text-xs font-bold text-blue-900">
+                    {t('purchase_payment_mode')}
+                  </label>
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setRestockPaymentMode('cash')}
+                      className={`py-1.5 px-2 rounded-xl border text-xs font-bold transition-all ${
+                        restockPaymentMode === 'cash'
+                          ? 'bg-emerald-600 text-white border-emerald-600 shadow-sm'
+                          : 'bg-white border-gray-200 text-gray-700 hover:bg-gray-50'
+                      }`}
+                    >
+                      {t('paid_cash_supplier')}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setRestockPaymentMode('credit')}
+                      className={`py-1.5 px-2 rounded-xl border text-xs font-bold transition-all ${
+                        restockPaymentMode === 'credit'
+                          ? 'bg-red-600 text-white border-red-600 shadow-sm'
+                          : 'bg-white border-gray-200 text-gray-700 hover:bg-gray-50'
+                      }`}
+                    >
+                      {t('paid_credit_supplier')}
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Price updates on restock: Cost Price is MANDATORY for Admin */}
               {isAdmin && (
                 <div>
                   <label className="block text-xs font-semibold text-purple-700 mb-1">
-                    {t('new_cost_price')} (so'm)
+                    {t('new_cost_price')} (so'm) *
                   </label>
                   <input
                     type="number"
                     step="any"
+                    required
                     placeholder="Tan narxi"
                     value={restockCost}
                     onChange={(e) => setRestockCost(e.target.value)}
-                    className="input-field text-sm font-mono border-purple-200"
+                    className="input-field text-sm font-mono border-purple-200 font-semibold"
                   />
                 </div>
               )}
@@ -562,6 +843,69 @@ export default function Inventory() {
                 <button
                   type="button"
                   onClick={() => setIsRestockOpen(false)}
+                  className="btn-secondary text-xs"
+                >
+                  {t('cancel')}
+                </button>
+                <button type="submit" className="btn-primary text-xs font-bold px-6">
+                  {t('save')}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Quick Add Supplier Modal */}
+      {isAddSupplierOpen && (
+        <div className="modal-overlay">
+          <div className="modal-content max-w-sm p-6">
+            <div className="flex items-center justify-between pb-3 border-b border-gray-200">
+              <h2 className="text-base font-bold text-gray-900 flex items-center gap-2">
+                <Truck className="w-5 h-5 text-blue-600" />
+                <span>{t('add_new_supplier')}</span>
+              </h2>
+              <button
+                onClick={() => setIsAddSupplierOpen(false)}
+                className="w-8 h-8 rounded-full bg-gray-100 flex items-center justify-center text-gray-500 hover:bg-gray-200"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveNewSupplier} className="space-y-4 mt-4">
+              <div>
+                <label className="block text-xs font-semibold text-gray-700 mb-1">
+                  {t('supplier_name')} *
+                </label>
+                <input
+                  type="text"
+                  required
+                  autoFocus
+                  placeholder="masalan: Avto Lider Optom"
+                  value={newSupplierName}
+                  onChange={(e) => setNewSupplierName(e.target.value)}
+                  className="input-field"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-gray-700 mb-1">
+                  {t('supplier_phone')}
+                </label>
+                <input
+                  type="text"
+                  placeholder="+998 90 123 45 67"
+                  value={newSupplierPhone}
+                  onChange={(e) => setNewSupplierPhone(e.target.value)}
+                  className="input-field"
+                />
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-3 border-t border-gray-100">
+                <button
+                  type="button"
+                  onClick={() => setIsAddSupplierOpen(false)}
                   className="btn-secondary text-xs"
                 >
                   {t('cancel')}

@@ -1,58 +1,76 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import { storage } from '../utils/storage';
-import { seedProducts, seedDebtors, seedSales } from '../utils/seedData';
 import { generateId, calcRealizedProfit, isDateInRange } from '../utils/helpers';
 import { autoInitSupabase, syncToCloud, syncFromCloud, isSupabaseConnected, clearCloudTables } from '../utils/supabase';
 
 const AppContext = createContext();
 
 export function AppProvider({ children }) {
-  // 1. PRODUCTS STATE
+  // 1. PRODUCTS STATE (Starts empty array [] on new devices, syncs from Supabase)
   const [products, setProducts] = useState(() => {
-    const initialized = storage.get('initialized', false);
     const saved = storage.get('products');
-    if (initialized) {
-      return Array.isArray(saved) ? saved : [];
-    }
-    storage.set('initialized', true);
-    storage.set('products', seedProducts);
-    return seedProducts;
+    return Array.isArray(saved) ? saved : [];
   });
 
   // 2. DEBTORS STATE (Cumulative profiles)
   const [debtors, setDebtors] = useState(() => {
-    const initialized = storage.get('initialized', false);
     const saved = storage.get('debtors');
-    if (initialized) {
-      return Array.isArray(saved) ? saved : [];
-    }
-    storage.set('debtors', seedDebtors);
-    return seedDebtors;
+    return Array.isArray(saved) ? saved : [];
   });
 
   // 3. SALES STATE
   const [sales, setSales] = useState(() => {
-    const initialized = storage.get('initialized', false);
     const saved = storage.get('sales');
-    if (initialized) {
-      return Array.isArray(saved) ? saved : [];
-    }
-    storage.set('sales', seedSales);
-    return seedSales;
+    return Array.isArray(saved) ? saved : [];
   });
 
-  // 4. CLOUD SYNC STATUS
+  // 4. SUPPLIERS STATE (Yetkazib beruvchilar)
+  const [suppliers, setSuppliers] = useState(() => {
+    const saved = storage.get('suppliers');
+    return Array.isArray(saved) ? saved : [];
+  });
+
+  // 5. CLOUD SYNC STATUS
   const [isCloudConnected, setIsCloudConnected] = useState(false);
 
-  // Initialize Supabase on mount
+  // Initialize Supabase on mount and sync real data from cloud
   useEffect(() => {
     const client = autoInitSupabase();
     if (client) {
       setIsCloudConnected(true);
+      (async () => {
+        try {
+          const [cloudProds, cloudDebtors, cloudSales, cloudSuppliers] = await Promise.all([
+            syncFromCloud('products'),
+            syncFromCloud('debtors'),
+            syncFromCloud('sales'),
+            syncFromCloud('suppliers'),
+          ]);
+
+          if (cloudProds && cloudProds.length > 0) {
+            setProducts(cloudProds);
+            storage.set('products', cloudProds);
+          }
+          if (cloudDebtors && cloudDebtors.length > 0) {
+            setDebtors(cloudDebtors);
+            storage.set('debtors', cloudDebtors);
+          }
+          if (cloudSales && cloudSales.length > 0) {
+            setSales(cloudSales);
+            storage.set('sales', cloudSales);
+          }
+          if (cloudSuppliers && cloudSuppliers.length > 0) {
+            setSuppliers(cloudSuppliers);
+            storage.set('suppliers', cloudSuppliers);
+          }
+        } catch (e) {
+          console.error("Cloud fetch error on mount:", e);
+        }
+      })();
     }
   }, []);
 
-  // Save to localStorage whenever state changes & optionally background sync
+  // Save helpers
   const saveProducts = (updated) => {
     setProducts(updated);
     storage.set('products', updated);
@@ -71,23 +89,137 @@ export function AppProvider({ children }) {
     if (isSupabaseConnected()) syncToCloud('sales', updated);
   };
 
+  const saveSuppliers = (updated) => {
+    setSuppliers(updated);
+    storage.set('suppliers', updated);
+    if (isSupabaseConnected()) syncToCloud('suppliers', updated);
+  };
+
+  // ==========================================
+  // SUPPLIERS ACTIONS
+  // ==========================================
+  const addSupplier = (supplierData) => {
+    const now = new Date().toISOString();
+    const newSupplier = {
+      id: generateId(),
+      name: supplierData.name.trim(),
+      phone: (supplierData.phone || '').trim(),
+      totalPurchased: 0,
+      totalPaid: 0,
+      debtBalance: 0,
+      payments: [],
+      createdAt: now,
+      updatedAt: now,
+    };
+    const updated = [...suppliers, newSupplier];
+    saveSuppliers(updated);
+    return newSupplier;
+  };
+
+  const updateSupplier = (id, updates) => {
+    const updated = suppliers.map((s) => {
+      if (s.id === id) {
+        return {
+          ...s,
+          ...updates,
+          name: updates.name !== undefined ? updates.name.trim() : s.name,
+          phone: updates.phone !== undefined ? updates.phone.trim() : s.phone,
+          updatedAt: new Date().toISOString(),
+        };
+      }
+      return s;
+    });
+    saveSuppliers(updated);
+  };
+
+  const deleteSupplier = (id) => {
+    const updated = suppliers.filter((s) => s.id !== id);
+    saveSuppliers(updated);
+  };
+
+  // Record payment to supplier (reduces debtBalance, increases totalPaid)
+  const paySupplierDebt = ({ supplierId, amount, method = 'cash', note = '' }) => {
+    const payAmt = Number(amount) || 0;
+    if (payAmt <= 0) return false;
+    const now = new Date().toISOString();
+    const updated = suppliers.map((s) => {
+      if (s.id === supplierId) {
+        const newDebt = Math.max(0, (s.debtBalance || 0) - payAmt);
+        const newPaid = (s.totalPaid || 0) + payAmt;
+        const newPayment = {
+          id: generateId(),
+          date: now,
+          amount: payAmt,
+          method,
+          note: note.trim(),
+        };
+        return {
+          ...s,
+          debtBalance: newDebt,
+          totalPaid: newPaid,
+          payments: [newPayment, ...(s.payments || [])],
+          updatedAt: now,
+        };
+      }
+      return s;
+    });
+    saveSuppliers(updated);
+    return true;
+  };
+
   // ==========================================
   // INVENTORY / PRODUCT ACTIONS
   // ==========================================
   const addProduct = (productData) => {
     const now = new Date().toISOString();
+    const cost = Number(productData.costPrice) || 0;
+    const sell = Number(productData.sellPrice) || 0;
+    const qty = Number(productData.quantity) || 0;
+    const supplierId = productData.supplierId || null;
+    const supplierName = productData.supplierName || '';
+    const paymentMode = productData.purchasePaymentMode || 'cash'; // 'cash' or 'credit'
+
     const newProduct = {
       id: generateId(),
       name: productData.name.trim(),
       artikul: (productData.artikul || '').trim(),
-      costPrice: Number(productData.costPrice) || 0,
-      sellPrice: Number(productData.sellPrice) || 0,
-      quantity: Number(productData.quantity) || 0,
+      costPrice: cost,
+      sellPrice: sell,
+      quantity: qty,
+      supplierId,
+      supplierName,
       createdAt: now,
       updatedAt: now,
     };
-    const updated = [newProduct, ...products];
-    saveProducts(updated);
+    const updatedProducts = [newProduct, ...products];
+    saveProducts(updatedProducts);
+
+    // If supplier selected and quantity > 0 and cost > 0, record incoming purchase
+    if (supplierId && qty > 0 && cost > 0) {
+      const incomingSum = cost * qty;
+      const updatedSuppliers = suppliers.map((s) => {
+        if (s.id === supplierId) {
+          const totalPurchased = (s.totalPurchased || 0) + incomingSum;
+          let debtBalance = s.debtBalance || 0;
+          let totalPaid = s.totalPaid || 0;
+          if (paymentMode === 'credit') {
+            debtBalance += incomingSum;
+          } else {
+            totalPaid += incomingSum;
+          }
+          return {
+            ...s,
+            totalPurchased,
+            debtBalance,
+            totalPaid,
+            updatedAt: now,
+          };
+        }
+        return s;
+      });
+      saveSuppliers(updatedSuppliers);
+    }
+
     return newProduct;
   };
 
@@ -102,6 +234,8 @@ export function AppProvider({ children }) {
           costPrice: updates.costPrice !== undefined ? Number(updates.costPrice) : p.costPrice,
           sellPrice: updates.sellPrice !== undefined ? Number(updates.sellPrice) : p.sellPrice,
           quantity: updates.quantity !== undefined ? Number(updates.quantity) : p.quantity,
+          supplierId: updates.supplierId !== undefined ? updates.supplierId : p.supplierId,
+          supplierName: updates.supplierName !== undefined ? updates.supplierName : p.supplierName,
           updatedAt: new Date().toISOString(),
         };
       }
@@ -115,40 +249,66 @@ export function AppProvider({ children }) {
     saveProducts(updated);
   };
 
-  // Restock existing product: adds to current quantity and updates cost/selling prices
-  const restockProduct = (id, addQty, newCostPrice, newSellPrice) => {
+  // Restock existing product: adds to current quantity, updates prices and optionally supplier accounting
+  const restockProduct = (id, addQty, newCostPrice, newSellPrice, supplierInfo = {}) => {
     const addQuantity = Number(addQty) || 0;
+    const now = new Date().toISOString();
+    let effectiveCost = 0;
+    let targetSupplierId = supplierInfo.supplierId || null;
+    let targetSupplierName = supplierInfo.supplierName || '';
+    const purchaseMode = supplierInfo.purchasePaymentMode || 'cash';
+
     const updated = products.map((p) => {
       if (p.id === id) {
+        effectiveCost = newCostPrice !== undefined && newCostPrice !== '' ? Number(newCostPrice) : (p.costPrice || 0);
+        if (!targetSupplierId && p.supplierId) {
+          targetSupplierId = p.supplierId;
+          targetSupplierName = p.supplierName || '';
+        }
         return {
           ...p,
           quantity: Math.max(0, Number((p.quantity + addQuantity).toFixed(2))),
-          costPrice: newCostPrice !== undefined && newCostPrice !== '' ? Number(newCostPrice) : p.costPrice,
+          costPrice: effectiveCost,
           sellPrice: newSellPrice !== undefined && newSellPrice !== '' ? Number(newSellPrice) : p.sellPrice,
-          updatedAt: new Date().toISOString(),
+          supplierId: targetSupplierId || p.supplierId || null,
+          supplierName: targetSupplierName || p.supplierName || '',
+          updatedAt: now,
         };
       }
       return p;
     });
     saveProducts(updated);
+
+    // If supplier selected and stock added, update supplier accounting
+    if (targetSupplierId && addQuantity > 0 && effectiveCost > 0) {
+      const incomingSum = effectiveCost * addQuantity;
+      const updatedSuppliers = suppliers.map((s) => {
+        if (s.id === targetSupplierId) {
+          const totalPurchased = (s.totalPurchased || 0) + incomingSum;
+          let debtBalance = s.debtBalance || 0;
+          let totalPaid = s.totalPaid || 0;
+          if (purchaseMode === 'credit') {
+            debtBalance += incomingSum;
+          } else {
+            totalPaid += incomingSum;
+          }
+          return {
+            ...s,
+            totalPurchased,
+            debtBalance,
+            totalPaid,
+            updatedAt: now,
+          };
+        }
+        return s;
+      });
+      saveSuppliers(updatedSuppliers);
+    }
   };
 
   // ==========================================
   // POS & SALES ACTIONS (STRICT CASH-BASIS PROFIT)
   // ==========================================
-  /**
-   * Process a checkout sale:
-   * items: array of { productId, productName, artikul, quantity, costPrice, sellPrice, bargainPrice }
-   * paymentData: {
-   *   mode: 'cash' | 'card' | 'credit' | 'mixed',
-   *   paidCash: number,
-   *   paidCard: number,
-   *   creditAmount: number,
-   *   debtorName: string,
-   *   debtorPhone: string,
-   *   debtorId: string | null
-   * }
-   */
   const processSale = ({ items, paymentData }) => {
     const now = new Date().toISOString();
     const saleId = generateId();
@@ -192,7 +352,7 @@ export function AppProvider({ children }) {
       ? Math.round(calcRealizedProfit(totalProfit, totalAmount, totalPaidNow))
       : 0;
 
-    // 2. Deduct inventory stock (Zero-Stock rule: keep item with soni=0, do NOT delete)
+    // 2. Deduct inventory stock (Zero-Stock rule: keep item with quantity=0, do NOT delete)
     const productStockMap = new Map();
     items.forEach((item) => {
       productStockMap.set(item.productId, (productStockMap.get(item.productId) || 0) + Number(item.quantity));
@@ -220,7 +380,6 @@ export function AppProvider({ children }) {
       const cleanName = (paymentData.debtorName || '').trim();
       const cleanPhone = (paymentData.debtorPhone || '').trim();
 
-      // Find existing debtor by ID, Phone, or Name
       let debtor = null;
       if (finalDebtorId) {
         debtor = updatedDebtorsList.find((d) => d.id === finalDebtorId);
@@ -249,7 +408,6 @@ export function AppProvider({ children }) {
       };
 
       if (debtor) {
-        // CUMULATIVE: add to existing debtor profile
         finalDebtorId = debtor.id;
         updatedDebtorsList = updatedDebtorsList.map((d) => {
           if (d.id === debtor.id) {
@@ -262,7 +420,6 @@ export function AppProvider({ children }) {
           return d;
         });
       } else {
-        // Create new debtor
         finalDebtorId = generateId();
         const newDebtor = {
           id: finalDebtorId,
@@ -278,20 +435,25 @@ export function AppProvider({ children }) {
       saveDebtors(updatedDebtorsList);
     }
 
-    // 4. Create Sale Record
+    // 4. Create Sale Record with preserved supplier info
     const newSale = {
       id: saleId,
       saleNumber: saleNum,
       date: now,
-      items: items.map((it) => ({
-        productId: it.productId,
-        productName: it.productName,
-        artikul: it.artikul || '',
-        quantity: Number(it.quantity),
-        costPrice: Number(it.costPrice || 0),
-        sellPrice: Number(it.sellPrice || 0),
-        bargainPrice: Number(it.bargainPrice !== undefined ? it.bargainPrice : it.sellPrice),
-      })),
+      items: items.map((it) => {
+        const prod = products.find((p) => p.id === it.productId);
+        return {
+          productId: it.productId,
+          productName: it.productName,
+          artikul: it.artikul || '',
+          quantity: Number(it.quantity),
+          costPrice: Number(it.costPrice || 0),
+          sellPrice: Number(it.sellPrice || 0),
+          bargainPrice: Number(it.bargainPrice !== undefined ? it.bargainPrice : it.sellPrice),
+          supplierId: it.supplierId || prod?.supplierId || null,
+          supplierName: it.supplierName || prod?.supplierName || '',
+        };
+      }),
       totalAmount,
       totalCost,
       totalProfit,
@@ -300,11 +462,13 @@ export function AppProvider({ children }) {
       paidCard,
       creditAmount,
       realizedProfit,
+      initialRealizedProfit: realizedProfit,
       debtorId: finalDebtorId,
       debtorName: paymentData.debtorName || '',
       debtorPhone: paymentData.debtorPhone || '',
       returned: false,
       returnedItems: [],
+      debtPayments: [],
     };
 
     const updatedSales = [newSale, ...sales];
@@ -316,10 +480,6 @@ export function AppProvider({ children }) {
   // ==========================================
   // DEBT REPAYMENT (CASH-BASIS PROFIT RECOGNITION)
   // ==========================================
-  /**
-   * Debtor pays off debt (either partially or in full).
-   * Strict Rule: Recognize cash/card revenue and proportional profit on this date!
-   */
   const payDebt = ({ debtorId, amount, method, note = '' }) => {
     const payAmount = Number(amount) || 0;
     if (payAmount <= 0) return false;
@@ -335,7 +495,7 @@ export function AppProvider({ children }) {
       id: paymentId,
       date: now,
       amount: payAmount,
-      method: method || 'cash', // 'cash' or 'card'
+      method: method || 'cash',
       note: note.trim(),
     };
 
@@ -351,7 +511,6 @@ export function AppProvider({ children }) {
     saveDebtors(updatedDebtors);
 
     // 2. Attribute proportional profit to the debtor's uncompleted sales
-    // We look for sales belonging to this debtor that still have unrealized profit
     let remainingPayToAllocate = payAmount;
     const updatedSales = sales.map((sale) => {
       if (
@@ -361,10 +520,8 @@ export function AppProvider({ children }) {
         sale.realizedProfit < sale.totalProfit
       ) {
         const unrealizedCredit = sale.creditAmount;
-        const unrealizedProfit = Math.max(0, sale.totalProfit - sale.realizedProfit);
-
         const allocateAmount = Math.min(remainingPayToAllocate, unrealizedCredit);
-        const addedProfit = unrealizedCredit > 0
+        const addedProfit = unrealizedCredit > 0 && sale.totalAmount > 0
           ? Math.round((allocateAmount / sale.totalAmount) * sale.totalProfit)
           : 0;
 
@@ -373,7 +530,6 @@ export function AppProvider({ children }) {
         return {
           ...sale,
           realizedProfit: Math.min(sale.totalProfit, sale.realizedProfit + addedProfit),
-          // Record debt collection payment event inside the sale for audit
           debtPayments: [
             ...(sale.debtPayments || []),
             {
@@ -396,19 +552,12 @@ export function AppProvider({ children }) {
   // ==========================================
   // VOZVRAT / PRODUCT RETURN ACTION
   // ==========================================
-  /**
-   * Return items from a sale:
-   * saleId: string
-   * returnItems: array of { productId, quantity }
-   * refundMethod: 'cash' | 'card' | 'debt_reduce'
-   */
   const processReturn = ({ saleId, returnItems, refundMethod }) => {
     const sale = sales.find((s) => s.id === saleId);
     if (!sale) return false;
 
     const now = new Date().toISOString();
 
-    // 1. Calculate refund sum & restore inventory stock
     let refundTotal = 0;
     let costTotalToRestore = 0;
 
@@ -418,17 +567,16 @@ export function AppProvider({ children }) {
       if (qty > 0) returnMap.set(ri.productId, qty);
     });
 
-    const updatedSaleItems = sale.items.map((item) => {
+    sale.items.forEach((item) => {
       if (returnMap.has(item.productId)) {
         const retQty = returnMap.get(item.productId);
         const itemPrice = item.bargainPrice !== undefined ? item.bargainPrice : item.sellPrice;
         refundTotal += itemPrice * retQty;
         costTotalToRestore += (item.costPrice || 0) * retQty;
       }
-      return item;
     });
 
-    // 2. Restore products in Ombor
+    // Restore stock in Ombor
     const updatedProducts = products.map((p) => {
       if (returnMap.has(p.id)) {
         const retQty = returnMap.get(p.id);
@@ -442,7 +590,7 @@ export function AppProvider({ children }) {
     });
     saveProducts(updatedProducts);
 
-    // 3. If credit sale: reduce debtor's remaining debt balance
+    // Adjust debtor balance if debt_reduce
     if (refundMethod === 'debt_reduce' && sale.debtorId) {
       const debtor = debtors.find((d) => d.id === sale.debtorId);
       if (debtor) {
@@ -466,7 +614,6 @@ export function AppProvider({ children }) {
       }
     }
 
-    // 4. Update the sale record
     const profitDeduction = refundTotal - costTotalToRestore;
     const isFullReturn = returnItems.every((ri) => {
       const orig = sale.items.find((si) => si.productId === ri.productId);
@@ -502,10 +649,8 @@ export function AppProvider({ children }) {
   // KPI & REPORT CALCULATIONS (DATE FILTERED)
   // ==========================================
   const getReportData = (dateRange = 'today') => {
-    // 1. Filter sales in range
     const filteredSales = sales.filter((s) => isDateInRange(s.date, dateRange));
 
-    // 2. Real Cash collected: from direct cash sales in range + debt repayments in cash in range
     let totalCashCollected = 0;
     let totalCardCollected = 0;
     let realizedProfit = 0;
@@ -513,10 +658,20 @@ export function AppProvider({ children }) {
     filteredSales.forEach((s) => {
       totalCashCollected += Number(s.paidCash || 0);
       totalCardCollected += Number(s.paidCard || 0);
-      realizedProfit += Number(s.realizedProfit || 0);
+      // For sales created in range, count initial realized profit
+      const initProfit = s.initialRealizedProfit !== undefined ? s.initialRealizedProfit : s.realizedProfit;
+      realizedProfit += Number(initProfit || 0);
     });
 
-    // Also include debtor debt payments made during this date range
+    // Also include debtor debt payments made during this date range (both cash/card & realized profit)
+    sales.forEach((s) => {
+      (s.debtPayments || []).forEach((dp) => {
+        if (isDateInRange(dp.date, dateRange)) {
+          realizedProfit += Number(dp.profitRecognized || 0);
+        }
+      });
+    });
+
     debtors.forEach((d) => {
       (d.payments || []).forEach((p) => {
         if (p.method !== 'return_adjustment' && isDateInRange(p.date, dateRange)) {
@@ -531,7 +686,7 @@ export function AppProvider({ children }) {
 
     const totalRevenue = totalCashCollected + totalCardCollected;
 
-    // 3. Tashqaridagi Jami Qarzlar (all currently active customer debts)
+    // Active customer debts
     let totalActiveDebts = 0;
     debtors.forEach((d) => {
       const totalTaken = (d.transactions || []).reduce((sum, tx) => sum + Number(tx.amount || 0), 0);
@@ -542,13 +697,45 @@ export function AppProvider({ children }) {
       }
     });
 
-    // 4. Ombordagi Qoldiq Qiymati (Total Cost Value & Total Retail Value of current stock)
+    // Warehouse stock valuation
     let stockCostValue = 0;
     let stockRetailValue = 0;
     products.forEach((p) => {
       const qty = Number(p.quantity || 0);
       stockCostValue += Number(p.costPrice || 0) * qty;
       stockRetailValue += Number(p.sellPrice || 0) * qty;
+    });
+
+    // Supplier Analytics
+    const supplierAnalytics = suppliers.map((sup) => {
+      let stockCost = 0;
+      let stockRetail = 0;
+      products.forEach((p) => {
+        if (p.supplierId === sup.id) {
+          const q = Number(p.quantity || 0);
+          stockCost += (p.costPrice || 0) * q;
+          stockRetail += (p.sellPrice || 0) * q;
+        }
+      });
+
+      let supplierProfit = 0;
+      sales.forEach((s) => {
+        const saleRealizedRatio = s.totalProfit > 0 ? (s.realizedProfit / s.totalProfit) : 1;
+        (s.items || []).forEach((it) => {
+          if (it.supplierId === sup.id) {
+            const actualPrice = it.bargainPrice !== undefined ? it.bargainPrice : it.sellPrice;
+            const itemMargin = (actualPrice - (it.costPrice || 0)) * (it.quantity || 1);
+            supplierProfit += Math.round(itemMargin * saleRealizedRatio);
+          }
+        });
+      });
+
+      return {
+        ...sup,
+        stockCostValue: stockCost,
+        stockRetailValue: stockRetail,
+        supplierProfit,
+      };
     });
 
     return {
@@ -561,6 +748,7 @@ export function AppProvider({ children }) {
       stockRetailValue,
       salesCount: filteredSales.length,
       salesList: filteredSales,
+      supplierAnalytics,
     };
   };
 
@@ -568,18 +756,17 @@ export function AppProvider({ children }) {
   // RESET ALL DATA TO ZERO (EMPTY STORE)
   // ==========================================
   const resetAllData = async () => {
-    // 1. Reset React state to empty arrays
     setProducts([]);
     setDebtors([]);
     setSales([]);
+    setSuppliers([]);
 
-    // 2. Clear stored collections and mark initialized=true so seed data is NEVER re-created
     storage.set('initialized', true);
     storage.set('products', []);
     storage.set('debtors', []);
     storage.set('sales', []);
+    storage.set('suppliers', []);
 
-    // 3. Delete all records from Supabase cloud tables
     if (isSupabaseConnected()) {
       await clearCloudTables();
     }
@@ -598,6 +785,11 @@ export function AppProvider({ children }) {
         processReturn,
         debtors,
         payDebt,
+        suppliers,
+        addSupplier,
+        updateSupplier,
+        deleteSupplier,
+        paySupplierDebt,
         getReportData,
         resetAllData,
         isCloudConnected,
