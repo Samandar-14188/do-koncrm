@@ -1,7 +1,8 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useLanguage } from '../context/LangContext';
 import { useAuth } from '../context/AuthContext';
 import { useApp } from '../context/AppContext';
+import { formatMoney } from '../utils/helpers';
 import {
   Settings as SettingsIcon,
   Languages,
@@ -12,13 +13,26 @@ import {
   AlertTriangle,
   Shield,
   ArrowLeftRight,
-  Loader2
+  Loader2,
+  DollarSign
 } from 'lucide-react';
 
 export default function Settings() {
   const { t, lang, toggleLang } = useLanguage();
   const { isAdmin, updatePasswords } = useAuth();
-  const { resetAllData, isCloudConnected } = useApp();
+  const { resetAllData, isCloudConnected, exchangeRate, updateExchangeRate } = useApp();
+
+  // Exchange Rate State (Admin only)
+  const [rateInput, setRateInput] = useState(exchangeRate || 12800);
+  const [isSavingRate, setIsSavingRate] = useState(false);
+  const [rateSaveToast, setRateSaveToast] = useState(false);
+  const [rateSaveMsg, setRateSaveMsg] = useState('');
+
+  useEffect(() => {
+    if (exchangeRate) {
+      setRateInput(exchangeRate);
+    }
+  }, [exchangeRate]);
 
   // Password fields state (Admin only)
   const [adminPassInput, setAdminPassInput] = useState('');
@@ -31,6 +45,34 @@ export default function Settings() {
   const [isResetConfirmOpen, setIsResetConfirmOpen] = useState(false);
   const [isResetting, setIsResetting] = useState(false);
   const [resetSuccessMsg, setResetSuccessMsg] = useState('');
+
+  // Save exchange rate
+  const handleSaveExchangeRate = async (e) => {
+    e.preventDefault();
+    if (!isAdmin) return;
+
+    const rate = Number(rateInput);
+    if (!rate || rate <= 0) {
+      alert("Iltimos, to'g'ri valyuta kursini kiriting!");
+      return;
+    }
+
+    setIsSavingRate(true);
+    try {
+      await updateExchangeRate(rate);
+      setRateSaveToast(true);
+      setRateSaveMsg(t('exchange_rate_saved'));
+      setTimeout(() => {
+        setRateSaveToast(false);
+        setRateSaveMsg('');
+      }, 4000);
+    } catch (err) {
+      console.error('Exchange rate save error:', err);
+      alert("Valyuta kursini saqlashda xatolik yuz berdi");
+    } finally {
+      setIsSavingRate(false);
+    }
+  };
 
   // Save new passwords to both localStorage and Supabase settings table
   const handleSavePasswords = async (e) => {
@@ -97,6 +139,14 @@ export default function Settings() {
 
   return (
     <div className="space-y-4 max-w-3xl min-w-0">
+      {/* Toast Alert for Exchange Rate */}
+      {rateSaveToast && (
+        <div className="fixed top-16 right-4 z-50 bg-emerald-600 text-white px-5 py-3 rounded-2xl shadow-xl flex items-center gap-2 text-sm font-bold animate-fade-in">
+          <CheckCircle2 className="w-5 h-5 flex-shrink-0" />
+          <span>{t('exchange_rate_saved')}</span>
+        </div>
+      )}
+
       {/* Toast Alert for Passwords */}
       {passSaveToast && (
         <div className="fixed top-16 right-4 z-50 bg-emerald-600 text-white px-5 py-3 rounded-2xl shadow-xl flex items-center gap-2 text-sm font-bold animate-fade-in">
@@ -121,11 +171,11 @@ export default function Settings() {
             <span className="truncate">{t('settings_title')}</span>
           </h1>
           <p className="text-xs text-gray-500 mt-0.5 truncate">
-            Tizim tili, xavfsizlik parollari va do'kon ma'lumotlarini boshqarish
+            Tizim tili, valyuta kursi, xavfsizlik parollari va do'kon ma'lumotlarini boshqarish
           </p>
         </div>
 
-        {/* Automatic Cloud Sync Status Pill (URL/Key are hidden from UI for protection) */}
+        {/* Automatic Cloud Sync Status Pill */}
         <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-white border border-slate-200 shadow-sm self-start sm:self-auto">
           <span
             className={`w-2 h-2 rounded-full flex-shrink-0 ${isCloudConnected ? 'bg-emerald-500 animate-pulse' : 'bg-gray-400'}`}
@@ -168,7 +218,91 @@ export default function Settings() {
         </div>
       </div>
 
-      {/* 2. Password Settings (Admin Only) */}
+      {/* 2. Global Exchange Rate Setting (USD to UZS) - Admin Only */}
+      {isAdmin ? (
+        <div className="bg-white rounded-3xl p-5 border border-gray-200 shadow-sm space-y-4 min-w-0">
+          <div className="flex items-center justify-between min-w-0">
+            <div className="flex items-center gap-2.5 min-w-0">
+              <div className="w-9 h-9 rounded-2xl bg-emerald-100 text-emerald-700 flex items-center justify-center font-bold flex-shrink-0">
+                <DollarSign className="w-5 h-5" />
+              </div>
+              <div className="min-w-0">
+                <h3 className="font-bold text-sm text-gray-900 truncate">{t('exchange_rate_title')}</h3>
+                <p className="text-xs text-gray-500 truncate">{t('exchange_rate_desc')}</p>
+              </div>
+            </div>
+
+            {rateSaveMsg && (
+              <span className="badge-success text-xs font-bold py-1 px-3 flex-shrink-0 ml-2">
+                {rateSaveMsg}
+              </span>
+            )}
+          </div>
+
+          <form onSubmit={handleSaveExchangeRate} className="space-y-3">
+            <div className="max-w-xs">
+              <label className="block text-xs font-semibold text-gray-700 mb-1">
+                {t('exchange_rate_label')}
+              </label>
+              <div className="relative">
+                <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-emerald-600 font-bold text-sm">
+                  1 $ =
+                </div>
+                <input
+                  type="number"
+                  step="1"
+                  min="1"
+                  required
+                  value={rateInput}
+                  onChange={(e) => setRateInput(e.target.value)}
+                  className="input-field pl-12 pr-14 text-sm font-bold font-mono text-gray-900"
+                  placeholder="12800"
+                />
+                <div className="absolute inset-y-0 right-0 pr-3 flex items-center pointer-events-none text-gray-400 text-xs">
+                  so'm
+                </div>
+              </div>
+              <p className="text-[11px] text-gray-400 mt-1.5">
+                Ombordagi dollar narxida ($) kiritilgan barcha tovarlar tan narxi ushbu kurs bo'yicha real vaqtda so'mga o'giriladi.
+              </p>
+            </div>
+
+            <button
+              type="submit"
+              disabled={isSavingRate || Number(rateInput) === exchangeRate}
+              className="btn-primary py-2.5 px-5 text-xs font-bold rounded-xl flex items-center gap-1.5 disabled:opacity-60"
+            >
+              {isSavingRate ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  <span>Saqlanmoqda...</span>
+                </>
+              ) : (
+                <>
+                  <Save className="w-4 h-4" />
+                  <span>Kursni saqlash</span>
+                </>
+              )}
+            </button>
+          </form>
+        </div>
+      ) : (
+        <div className="bg-white rounded-3xl p-5 border border-gray-200 shadow-sm flex items-center justify-between min-w-0">
+          <div className="flex items-center gap-2.5 min-w-0">
+            <div className="w-9 h-9 rounded-2xl bg-emerald-100 text-emerald-700 flex items-center justify-center font-bold flex-shrink-0">
+              <DollarSign className="w-5 h-5" />
+            </div>
+            <div className="min-w-0">
+              <h3 className="font-bold text-sm text-gray-900 truncate">{t('exchange_rate_title')}</h3>
+              <p className="text-xs text-gray-500 truncate">
+                Amaldagi kurs: <strong className="font-mono text-emerald-700">1 USD = {formatMoney(exchangeRate)} so'm</strong>
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 3. Password Settings (Admin Only) */}
       {isAdmin ? (
         <div className="bg-white rounded-3xl p-5 border border-gray-200 shadow-sm space-y-4 min-w-0">
           <div className="flex items-center justify-between min-w-0">
@@ -244,7 +378,7 @@ export default function Settings() {
         </div>
       )}
 
-      {/* 3. Reset All Data to ZERO (Empty Store - Admin Only) */}
+      {/* 4. Reset All Data to ZERO (Empty Store - Admin Only) */}
       {isAdmin && (
         <div className="bg-red-50/60 rounded-3xl p-5 border border-red-200 shadow-sm space-y-3 min-w-0">
           <div className="flex items-center gap-2.5 min-w-0">
@@ -254,7 +388,7 @@ export default function Settings() {
             <div className="min-w-0">
               <h3 className="font-bold text-sm text-red-900 truncate">{t('reset_data_title')}</h3>
               <p className="text-xs text-red-700 leading-relaxed mt-0.5">
-                Barcha mahsulotlar, sotuvlar va qarzdorlarni butunlay 0 ga tushirish (bo'sh do'kon holati).
+                Barcha mahsulotlar, sotuvlar, qarzdorlar va yetkazib beruvchilarni butunlay 0 ga tushirish (bo'sh do'kon holati).
               </p>
             </div>
           </div>

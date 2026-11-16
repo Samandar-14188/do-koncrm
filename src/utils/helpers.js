@@ -9,6 +9,16 @@ export function formatUZS(amount) {
   return formatMoney(amount) + " so'm";
 }
 
+// Format with "$" prefix
+export function formatUSD(amount) {
+  if (amount == null || isNaN(amount)) return '$0';
+  const num = Number(amount);
+  const formatted = num % 1 === 0
+    ? formatMoney(num)
+    : num.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  return '$' + formatted;
+}
+
 // Generate UUID
 export function generateId() {
   if (typeof crypto !== 'undefined' && crypto.randomUUID) {

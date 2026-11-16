@@ -2,7 +2,7 @@ import React, { useState, useMemo } from 'react';
 import { useLanguage } from '../context/LangContext';
 import { useAuth } from '../context/AuthContext';
 import { useApp } from '../context/AppContext';
-import { formatMoney, formatUZS, formatDate } from '../utils/helpers';
+import { formatMoney, formatUZS, formatUSD, formatDate } from '../utils/helpers';
 import * as XLSX from 'xlsx';
 import {
   BarChart3,
@@ -17,13 +17,14 @@ import {
   Truck,
   CreditCard,
   Banknote,
+  DollarSign,
   X
 } from 'lucide-react';
 
 export default function Reports() {
   const { t, transliterate } = useLanguage();
   const { isAdmin } = useAuth();
-  const { getReportData, products, sales, debtors, suppliers, paySupplierDebt } = useApp();
+  const { getReportData, products, sales, debtors, suppliers, paySupplierDebt, exchangeRate } = useApp();
 
   // Date range filter
   const [dateRange, setDateRange] = useState('today'); // 'today', 'yesterday', 'week', 'month', 'all'
@@ -32,6 +33,7 @@ export default function Reports() {
   // Pay Supplier Debt Modal State
   const [payingSupplier, setPayingSupplier] = useState(null);
   const [paySupplierAmount, setPaySupplierAmount] = useState('');
+  const [paySupplierCurrency, setPaySupplierCurrency] = useState('UZS'); // 'UZS' or 'USD'
   const [paySupplierMethod, setPaySupplierMethod] = useState('cash'); // 'cash' or 'card'
   const [paySupplierNote, setPaySupplierNote] = useState('');
 
@@ -61,6 +63,8 @@ export default function Reports() {
   // Handle Pay Supplier Debt
   const handleOpenPaySupplier = (sup) => {
     setPayingSupplier(sup);
+    const supCurr = sup.currency || 'UZS';
+    setPaySupplierCurrency(supCurr);
     setPaySupplierAmount(sup.debtBalance > 0 ? String(sup.debtBalance) : '');
     setPaySupplierMethod('cash');
     setPaySupplierNote('');
@@ -76,6 +80,7 @@ export default function Reports() {
       amount: amt,
       method: paySupplierMethod,
       note: paySupplierNote,
+      paymentCurrency: paySupplierCurrency,
     });
 
     showToast(t('supplier_debt_paid'));
@@ -93,6 +98,8 @@ export default function Reports() {
         "Mahsulot nomi": p.name,
         "Artikul / Polka": p.artikul || "-",
         "Yetkazib beruvchi": p.supplierName || "-",
+        "Tan narxi valyutasi": p.costCurrency || "UZS",
+        "Tan narxi (valyutada)": p.costCurrency === 'USD' ? (p.costPriceUSD || 0) : (p.costPrice || 0),
         "Tan narxi (so'm)": p.costPrice || 0,
         "Sotuv narxi (so'm)": p.sellPrice || 0,
         "Qoldiq soni": p.quantity || 0,
@@ -139,16 +146,23 @@ export default function Reports() {
       XLSX.utils.book_append_sheet(wb, wsQarzdor, "Qarzdorlar");
 
       // 4. SHEET 4: Yetkazib_beruvchilar
-      const yetkazibData = (report.supplierAnalytics || []).map((sup, idx) => ({
-        "№": idx + 1,
-        "Yetkazib beruvchi": sup.name,
-        "Telefon raqami": sup.phone || "-",
-        "Ombordagi tovar (Tan narxda)": sup.stockCostValue || 0,
-        "Sotuvdan kelgan Sof Foyda": sup.supplierProfit || 0,
-        "Jami olingan yuk (so'm)": sup.totalPurchased || 0,
-        "To'langan (so'm)": sup.totalPaid || 0,
-        "Qolgan qarzimiz (so'm)": sup.debtBalance || 0,
-      }));
+      const yetkazibData = (report.supplierAnalytics || []).map((sup, idx) => {
+        const isUSD = sup.currency === 'USD';
+        return {
+          "№": idx + 1,
+          "Yetkazib beruvchi": sup.name,
+          "Hisob valyutasi": isUSD ? "USD ($)" : "UZS (so'm)",
+          "Telefon raqami": sup.phone || "-",
+          "Ombordagi tovar (Tan narxda, so'm)": sup.stockCostValue || 0,
+          "Ombordagi tovar ($)": sup.stockCostValueUSD || 0,
+          "Sotuvdan kelgan Sof Foyda (so'm)": sup.supplierProfit || 0,
+          "Jami olingan yuk": isUSD ? `$${sup.totalPurchased || 0}` : `${sup.totalPurchased || 0} so'm`,
+          "To'langan": isUSD ? `$${sup.totalPaid || 0}` : `${sup.totalPaid || 0} so'm`,
+          "Qolgan qarzimiz": isUSD
+            ? `$${sup.debtBalance || 0} (~${formatUZS((sup.debtBalance || 0) * exchangeRate)})`
+            : `${formatUZS(sup.debtBalance || 0)}`,
+        };
+      });
       const wsYetkazib = XLSX.utils.json_to_sheet(yetkazibData);
       XLSX.utils.book_append_sheet(wb, wsYetkazib, "Yetkazib_beruvchilar");
 
@@ -362,6 +376,7 @@ export default function Reports() {
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3 min-w-0">
             {report.supplierAnalytics.map((sup) => {
               const hasDebt = (sup.debtBalance || 0) > 0;
+              const isUSD = sup.currency === 'USD';
               return (
                 <div
                   key={sup.id}
@@ -371,9 +386,16 @@ export default function Reports() {
                     {/* Supplier Name & Phone */}
                     <div className="flex items-start justify-between gap-2 min-w-0 pb-2.5 border-b border-gray-200/70">
                       <div className="min-w-0">
-                        <h4 className="font-extrabold text-gray-900 text-sm truncate">
-                          {transliterate(sup.name)}
-                        </h4>
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <h4 className="font-extrabold text-gray-900 text-sm truncate">
+                            {transliterate(sup.name)}
+                          </h4>
+                          <span className={`text-[10px] px-1.5 py-0.5 rounded font-bold ${
+                            isUSD ? 'bg-emerald-100 text-emerald-800 border border-emerald-200' : 'bg-blue-100 text-blue-800 border border-blue-200'
+                          }`}>
+                            {isUSD ? 'USD ($)' : 'UZS (so\'m)'}
+                          </span>
+                        </div>
                         {sup.phone && (
                           <p className="text-xs font-mono text-gray-500 mt-0.5 truncate">
                             {sup.phone}
@@ -382,9 +404,16 @@ export default function Reports() {
                       </div>
 
                       {hasDebt ? (
-                        <span className="badge-danger text-[11px] font-bold whitespace-nowrap">
-                          Qarzimiz: {formatUZS(sup.debtBalance)}
-                        </span>
+                        <div className="text-right">
+                          <span className="badge-danger text-[11px] font-bold whitespace-nowrap block">
+                            Qarzimiz: {isUSD ? `$${formatUSD(sup.debtBalance)}` : formatUZS(sup.debtBalance)}
+                          </span>
+                          {isUSD && (
+                            <span className="text-[10px] text-gray-500 font-mono mt-0.5 block whitespace-nowrap">
+                              ≈ {formatUZS(sup.debtBalance * exchangeRate)}
+                            </span>
+                          )}
+                        </div>
                       ) : (
                         <span className="badge-success text-[11px] font-semibold whitespace-nowrap">
                           Qarz yo'q
@@ -402,6 +431,11 @@ export default function Reports() {
                         <p className="font-bold text-purple-800 font-mono mt-1 text-sm truncate">
                           {formatUZS(sup.stockCostValue)}
                         </p>
+                        {isUSD && (
+                          <p className="text-[10px] text-gray-400 font-mono truncate">
+                            ≈ ${formatUSD(sup.stockCostValueUSD || (sup.stockCostValue / exchangeRate))}
+                          </p>
+                        )}
                       </div>
 
                       {/* 2. Sotuvdan kelgan Sof Foyda */}
@@ -420,8 +454,13 @@ export default function Reports() {
                           {t('supplier_total_purchased')}
                         </span>
                         <p className="font-bold text-gray-900 font-mono mt-1 text-xs truncate">
-                          {formatUZS(sup.totalPurchased)}
+                          {isUSD ? `$${formatUSD(sup.totalPurchased)}` : formatUZS(sup.totalPurchased)}
                         </p>
+                        {isUSD && (
+                          <p className="text-[10px] text-gray-400 font-mono truncate">
+                            ≈ {formatUZS(sup.totalPurchased * exchangeRate)}
+                          </p>
+                        )}
                       </div>
 
                       {/* 4. To'langan summa */}
@@ -430,8 +469,13 @@ export default function Reports() {
                           To'langan summa
                         </span>
                         <p className="font-bold text-blue-700 font-mono mt-1 text-xs truncate">
-                          {formatUZS(sup.totalPaid)}
+                          {isUSD ? `$${formatUSD(sup.totalPaid)}` : formatUZS(sup.totalPaid)}
                         </p>
+                        {isUSD && (
+                          <p className="text-[10px] text-gray-400 font-mono truncate">
+                            ≈ {formatUZS(sup.totalPaid * exchangeRate)}
+                          </p>
+                        )}
                       </div>
                     </div>
                   </div>
@@ -439,7 +483,10 @@ export default function Reports() {
                   {/* Actions: Pay Supplier Debt */}
                   <div className="pt-2 border-t border-gray-200/60 flex items-center justify-between gap-2">
                     <span className="text-[11px] text-gray-500 font-medium">
-                      Yetkazib beruvchiga qarz: <strong className={hasDebt ? 'text-red-600' : 'text-gray-700'}>{formatUZS(sup.debtBalance)}</strong>
+                      Yetkazib beruvchiga qarz:{' '}
+                      <strong className={hasDebt ? 'text-red-600' : 'text-gray-700'}>
+                        {isUSD ? `$${formatUSD(sup.debtBalance)}` : formatUZS(sup.debtBalance)}
+                      </strong>
                     </span>
 
                     <button
@@ -551,38 +598,118 @@ export default function Reports() {
 
             <form onSubmit={handleConfirmPaySupplier} className="space-y-4 mt-4">
               <div className="bg-gray-50 p-3 rounded-2xl space-y-1">
-                <p className="text-xs font-extrabold text-gray-900">{transliterate(payingSupplier.name)}</p>
+                <div className="flex items-center justify-between">
+                  <p className="text-xs font-extrabold text-gray-900">{transliterate(payingSupplier.name)}</p>
+                  <span className={`text-[10px] px-1.5 py-0.5 rounded font-bold ${
+                    payingSupplier.currency === 'USD' ? 'bg-emerald-100 text-emerald-800' : 'bg-blue-100 text-blue-800'
+                  }`}>
+                    {payingSupplier.currency === 'USD' ? 'USD ($)' : 'UZS (so\'m)'}
+                  </span>
+                </div>
                 <p className="text-xs text-gray-500">
                   Yetkazib beruvchiga qarzimiz:{' '}
                   <span className="font-bold text-red-600 font-mono">
-                    {formatUZS(payingSupplier.debtBalance)}
+                    {payingSupplier.currency === 'USD'
+                      ? `$${formatUSD(payingSupplier.debtBalance)} (~${formatUZS(payingSupplier.debtBalance * exchangeRate)})`
+                      : formatUZS(payingSupplier.debtBalance)}
                   </span>
                 </p>
               </div>
 
+              {/* Payment Currency Selection */}
               <div>
                 <label className="block text-xs font-semibold text-gray-700 mb-1">
-                  To'lov summasi (so'm) *
+                  To'lov valyutasi
                 </label>
-                <input
-                  type="number"
-                  step="any"
-                  min="1"
-                  required
-                  autoFocus
-                  placeholder="masalan: 500000"
-                  value={paySupplierAmount}
-                  onChange={(e) => setPaySupplierAmount(e.target.value)}
-                  className="input-field text-base font-bold text-blue-700"
-                />
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setPaySupplierCurrency('UZS');
+                      if (payingSupplier.currency === 'USD' && payingSupplier.debtBalance > 0) {
+                        setPaySupplierAmount(String(Math.round(payingSupplier.debtBalance * exchangeRate)));
+                      } else {
+                        setPaySupplierAmount(String(payingSupplier.debtBalance));
+                      }
+                    }}
+                    className={`py-2 px-3 rounded-xl border text-xs font-bold transition-all ${
+                      paySupplierCurrency === 'UZS'
+                        ? 'bg-blue-600 text-white border-blue-600 shadow-sm'
+                        : 'bg-white border-gray-200 text-gray-700 hover:bg-gray-50'
+                    }`}
+                  >
+                    UZS (so'm)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setPaySupplierCurrency('USD');
+                      if (payingSupplier.currency === 'UZS' && payingSupplier.debtBalance > 0) {
+                        setPaySupplierAmount(String(Math.round((payingSupplier.debtBalance / exchangeRate) * 100) / 100));
+                      } else {
+                        setPaySupplierAmount(String(payingSupplier.debtBalance));
+                      }
+                    }}
+                    className={`py-2 px-3 rounded-xl border text-xs font-bold transition-all ${
+                      paySupplierCurrency === 'USD'
+                        ? 'bg-emerald-600 text-white border-emerald-600 shadow-sm'
+                        : 'bg-white border-gray-200 text-gray-700 hover:bg-gray-50'
+                    }`}
+                  >
+                    USD ($)
+                  </button>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-gray-700 mb-1">
+                  To'lov summasi ({paySupplierCurrency === 'USD' ? '$' : 'so\'m'}) *
+                </label>
+                <div className="relative">
+                  {paySupplierCurrency === 'USD' && (
+                    <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-emerald-600 font-bold text-sm">
+                      $
+                    </div>
+                  )}
+                  <input
+                    type="number"
+                    step="any"
+                    min="0.01"
+                    required
+                    autoFocus
+                    placeholder={paySupplierCurrency === 'USD' ? "masalan: 100" : "masalan: 500000"}
+                    value={paySupplierAmount}
+                    onChange={(e) => setPaySupplierAmount(e.target.value)}
+                    className={`input-field text-base font-bold text-blue-700 font-mono ${
+                      paySupplierCurrency === 'USD' ? 'pl-7' : ''
+                    }`}
+                  />
+                </div>
+
+                {/* Conversion explanation when cross-currency */}
+                {paySupplierAmount && Number(paySupplierAmount) > 0 && payingSupplier.currency !== paySupplierCurrency && (
+                  <p className="text-[11px] text-blue-600 mt-1 font-mono font-medium">
+                    {payingSupplier.currency === 'USD' && paySupplierCurrency === 'UZS'
+                      ? `≈ $${formatUSD(Number(paySupplierAmount) / exchangeRate)} qarzdan yechiladi (kurs: 1$ = ${formatUZS(exchangeRate)})`
+                      : `≈ ${formatUZS(Math.round(Number(paySupplierAmount) * exchangeRate))} qarzdan yechiladi (kurs: 1$ = ${formatUZS(exchangeRate)})`}
+                  </p>
+                )}
 
                 {payingSupplier.debtBalance > 0 && (
                   <button
                     type="button"
-                    onClick={() => setPaySupplierAmount(String(payingSupplier.debtBalance))}
-                    className="mt-1 text-[11px] font-bold text-blue-600 hover:text-blue-800"
+                    onClick={() => {
+                      if (paySupplierCurrency === 'USD' && payingSupplier.currency === 'UZS') {
+                        setPaySupplierAmount(String(Math.round((payingSupplier.debtBalance / exchangeRate) * 100) / 100));
+                      } else if (paySupplierCurrency === 'UZS' && payingSupplier.currency === 'USD') {
+                        setPaySupplierAmount(String(Math.round(payingSupplier.debtBalance * exchangeRate)));
+                      } else {
+                        setPaySupplierAmount(String(payingSupplier.debtBalance));
+                      }
+                    }}
+                    className="mt-1.5 text-[11px] font-bold text-blue-600 hover:text-blue-800"
                   >
-                    Barcha qarzni kiritish ({formatUZS(payingSupplier.debtBalance)})
+                    Barcha qarzni kiritish ({payingSupplier.currency === 'USD' ? `$${formatUSD(payingSupplier.debtBalance)}` : formatUZS(payingSupplier.debtBalance)})
                   </button>
                 )}
               </div>

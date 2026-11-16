@@ -1,11 +1,14 @@
 import React from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useLanguage } from '../context/LangContext';
+import { useApp } from '../context/AppContext';
+import { formatMoney } from '../utils/helpers';
 import { LogOut, Languages, Shield, User } from 'lucide-react';
 
 export default function Header() {
   const { logout, isAdmin } = useAuth();
   const { t, lang, toggleLang } = useLanguage();
+  const { exchangeRate } = useApp();
 
   return (
     <header className="shrink-0 h-14 md:h-16 bg-white border-b border-slate-200 px-2.5 sm:px-4 md:px-6 flex items-center justify-between z-20 gap-2">
@@ -23,7 +26,18 @@ export default function Header() {
       </div>
 
       {/* Right: Controls */}
-      <div className="flex items-center gap-1.5 sm:gap-2.5 flex-shrink-0">
+      <div className="flex items-center gap-1.5 sm:gap-2 flex-shrink-0">
+        {/* Active USD Exchange Rate Badge */}
+        <div
+          className="flex items-center gap-1 px-2 sm:px-2.5 py-1 sm:py-1.5 text-[11px] sm:text-xs font-semibold rounded-xl bg-emerald-50 text-emerald-800 border border-emerald-200"
+          title={`1 USD = ${formatMoney(exchangeRate)} so'm`}
+        >
+          <span className="font-extrabold text-emerald-700">$</span>
+          <span className="font-mono font-bold text-emerald-900 text-[10px] sm:text-xs">
+            {formatMoney(exchangeRate)}
+          </span>
+        </div>
+
         {/* Dual Language Script Switcher */}
         <button
           onClick={toggleLang}

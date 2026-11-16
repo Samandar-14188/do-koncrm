@@ -166,7 +166,48 @@ export async function fetchCloudPasswords() {
   }
 }
 
-// Delete all records from cloud tables (Empty Store wipe - preserves auth_passwords)
+// Save exchange rate to cloud settings table
+export async function saveCloudExchangeRate(rate) {
+  if (!supabaseClient) autoInitSupabase();
+  if (!supabaseClient) return { error: 'Not connected' };
+  try {
+    const row = {
+      id: 'exchange_rate',
+      data: { rate: Number(rate) || 12800, updatedAt: new Date().toISOString() },
+      updated_at: new Date().toISOString(),
+    };
+    const { data, error } = await supabaseClient
+      .from('settings')
+      .upsert([row], { onConflict: 'id' });
+    if (error) console.error('saveCloudExchangeRate error:', error);
+    return { data, error };
+  } catch (e) {
+    console.error('saveCloudExchangeRate error:', e);
+    return { error: e.message };
+  }
+}
+
+// Fetch exchange rate from cloud settings table
+export async function fetchCloudExchangeRate() {
+  if (!supabaseClient) autoInitSupabase();
+  if (!supabaseClient) return null;
+  try {
+    const { data, error } = await supabaseClient
+      .from('settings')
+      .select('*')
+      .eq('id', 'exchange_rate')
+      .maybeSingle();
+    if (data && data.data && data.data.rate) {
+      return Number(data.data.rate);
+    }
+    return null;
+  } catch (e) {
+    console.warn('fetchCloudExchangeRate error:', e);
+    return null;
+  }
+}
+
+// Delete all records from cloud tables (Empty Store wipe - preserves auth_passwords & exchange_rate)
 export async function clearCloudTables() {
   if (!supabaseClient) return { success: false, error: 'Not connected' };
   try {
@@ -175,7 +216,7 @@ export async function clearCloudTables() {
       supabaseClient.from('debtors').delete().neq('id', ''),
       supabaseClient.from('sales').delete().neq('id', ''),
       supabaseClient.from('suppliers').delete().neq('id', ''),
-      supabaseClient.from('settings').delete().neq('id', 'auth_passwords'),
+      supabaseClient.from('settings').delete().not('id', 'in', '("auth_passwords","exchange_rate")'),
     ]);
     return { success: true };
   } catch (err) {

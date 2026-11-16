@@ -1,7 +1,15 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import { storage } from '../utils/storage';
 import { generateId, calcRealizedProfit, isDateInRange } from '../utils/helpers';
-import { autoInitSupabase, syncToCloud, syncFromCloud, isSupabaseConnected, clearCloudTables } from '../utils/supabase';
+import {
+  autoInitSupabase,
+  syncToCloud,
+  syncFromCloud,
+  isSupabaseConnected,
+  clearCloudTables,
+  saveCloudExchangeRate,
+  fetchCloudExchangeRate,
+} from '../utils/supabase';
 
 const AppContext = createContext();
 
@@ -30,7 +38,13 @@ export function AppProvider({ children }) {
     return Array.isArray(saved) ? saved : [];
   });
 
-  // 5. CLOUD SYNC STATUS
+  // 5. EXCHANGE RATE STATE (USD to UZS Rate, default 12800)
+  const [exchangeRate, setExchangeRate] = useState(() => {
+    const saved = storage.get('exchange_rate');
+    return Number(saved) || 12800;
+  });
+
+  // 6. CLOUD SYNC STATUS
   const [isCloudConnected, setIsCloudConnected] = useState(false);
 
   // Initialize Supabase on mount and sync real data from cloud
@@ -40,13 +54,18 @@ export function AppProvider({ children }) {
       setIsCloudConnected(true);
       (async () => {
         try {
-          const [cloudProds, cloudDebtors, cloudSales, cloudSuppliers] = await Promise.all([
+          const [cloudProds, cloudDebtors, cloudSales, cloudSuppliers, cloudRate] = await Promise.all([
             syncFromCloud('products'),
             syncFromCloud('debtors'),
             syncFromCloud('sales'),
             syncFromCloud('suppliers'),
+            fetchCloudExchangeRate(),
           ]);
 
+          if (cloudRate && Number(cloudRate) > 0) {
+            setExchangeRate(Number(cloudRate));
+            storage.set('exchange_rate', Number(cloudRate));
+          }
           if (cloudProds && cloudProds.length > 0) {
             setProducts(cloudProds);
             storage.set('products', cloudProds);
@@ -95,6 +114,33 @@ export function AppProvider({ children }) {
     if (isSupabaseConnected()) syncToCloud('suppliers', updated);
   };
 
+  // Update Exchange Rate (USD to UZS)
+  const updateExchangeRate = async (newRate) => {
+    const rate = Number(newRate);
+    if (!rate || rate <= 0) return false;
+
+    setExchangeRate(rate);
+    storage.set('exchange_rate', rate);
+    if (isSupabaseConnected()) {
+      await saveCloudExchangeRate(rate);
+    }
+
+    // Recalculate converted UZS costPrice for all products with USD cost
+    const updatedProducts = products.map((p) => {
+      if (p.costCurrency === 'USD' && p.costPriceUSD) {
+        return {
+          ...p,
+          costPrice: Math.round(Number(p.costPriceUSD) * rate),
+          updatedAt: new Date().toISOString(),
+        };
+      }
+      return p;
+    });
+    saveProducts(updatedProducts);
+
+    return true;
+  };
+
   // ==========================================
   // SUPPLIERS ACTIONS
   // ==========================================
@@ -104,6 +150,7 @@ export function AppProvider({ children }) {
       id: generateId(),
       name: supplierData.name.trim(),
       phone: (supplierData.phone || '').trim(),
+      currency: supplierData.currency === 'USD' ? 'USD' : 'UZS',
       totalPurchased: 0,
       totalPaid: 0,
       debtBalance: 0,
@@ -124,6 +171,7 @@ export function AppProvider({ children }) {
           ...updates,
           name: updates.name !== undefined ? updates.name.trim() : s.name,
           phone: updates.phone !== undefined ? updates.phone.trim() : s.phone,
+          currency: updates.currency !== undefined ? updates.currency : (s.currency || 'UZS'),
           updatedAt: new Date().toISOString(),
         };
       }
@@ -137,19 +185,32 @@ export function AppProvider({ children }) {
     saveSuppliers(updated);
   };
 
-  // Record payment to supplier (reduces debtBalance, increases totalPaid)
-  const paySupplierDebt = ({ supplierId, amount, method = 'cash', note = '' }) => {
+  // Record payment to supplier (supports USD or UZS)
+  const paySupplierDebt = ({ supplierId, amount, method = 'cash', note = '', paymentCurrency }) => {
     const payAmt = Number(amount) || 0;
     if (payAmt <= 0) return false;
     const now = new Date().toISOString();
+
     const updated = suppliers.map((s) => {
       if (s.id === supplierId) {
-        const newDebt = Math.max(0, (s.debtBalance || 0) - payAmt);
-        const newPaid = (s.totalPaid || 0) + payAmt;
+        const supCurr = s.currency || 'UZS';
+        const payCurr = paymentCurrency || supCurr;
+
+        let debtDeduction = payAmt;
+        if (supCurr === 'USD' && payCurr === 'UZS') {
+          debtDeduction = Math.round((payAmt / exchangeRate) * 100) / 100;
+        } else if (supCurr === 'UZS' && payCurr === 'USD') {
+          debtDeduction = Math.round(payAmt * exchangeRate);
+        }
+
+        const newDebt = Math.max(0, (s.debtBalance || 0) - debtDeduction);
+        const newPaid = (s.totalPaid || 0) + debtDeduction;
         const newPayment = {
           id: generateId(),
           date: now,
           amount: payAmt,
+          currency: payCurr,
+          debtDeduction,
           method,
           note: note.trim(),
         };
@@ -172,7 +233,18 @@ export function AppProvider({ children }) {
   // ==========================================
   const addProduct = (productData) => {
     const now = new Date().toISOString();
-    const cost = Number(productData.costPrice) || 0;
+    const costCurrency = productData.costCurrency === 'USD' ? 'USD' : 'UZS';
+    let costPrice = 0;
+    let costPriceUSD = 0;
+
+    if (costCurrency === 'USD') {
+      costPriceUSD = Number(productData.costPriceUSD !== undefined ? productData.costPriceUSD : productData.costPrice) || 0;
+      costPrice = Math.round(costPriceUSD * exchangeRate);
+    } else {
+      costPrice = Number(productData.costPrice) || 0;
+      costPriceUSD = Math.round((costPrice / exchangeRate) * 100) / 100;
+    }
+
     const sell = Number(productData.sellPrice) || 0;
     const qty = Number(productData.quantity) || 0;
     const supplierId = productData.supplierId || null;
@@ -183,7 +255,9 @@ export function AppProvider({ children }) {
       id: generateId(),
       name: productData.name.trim(),
       artikul: (productData.artikul || '').trim(),
-      costPrice: cost,
+      costPrice,
+      costPriceUSD,
+      costCurrency,
       sellPrice: sell,
       quantity: qty,
       supplierId,
@@ -194,9 +268,12 @@ export function AppProvider({ children }) {
     const updatedProducts = [newProduct, ...products];
     saveProducts(updatedProducts);
 
-    // If supplier selected and quantity > 0 and cost > 0, record incoming purchase
-    if (supplierId && qty > 0 && cost > 0) {
-      const incomingSum = cost * qty;
+    // If supplier selected and quantity > 0 and cost > 0, record incoming purchase in supplier's currency
+    if (supplierId && qty > 0 && costPrice > 0) {
+      const selectedSup = suppliers.find((s) => s.id === supplierId);
+      const isUSDSupplier = selectedSup?.currency === 'USD';
+      const incomingSum = isUSDSupplier ? (costPriceUSD * qty) : (costPrice * qty);
+
       const updatedSuppliers = suppliers.map((s) => {
         if (s.id === supplierId) {
           const totalPurchased = (s.totalPurchased || 0) + incomingSum;
@@ -226,12 +303,28 @@ export function AppProvider({ children }) {
   const updateProduct = (id, updates) => {
     const updated = products.map((p) => {
       if (p.id === id) {
+        const costCurrency = updates.costCurrency || p.costCurrency || 'UZS';
+        let costPrice = p.costPrice;
+        let costPriceUSD = p.costPriceUSD;
+
+        if (updates.costPrice !== undefined || updates.costPriceUSD !== undefined) {
+          if (costCurrency === 'USD') {
+            costPriceUSD = Number(updates.costPriceUSD !== undefined ? updates.costPriceUSD : updates.costPrice) || 0;
+            costPrice = Math.round(costPriceUSD * exchangeRate);
+          } else {
+            costPrice = Number(updates.costPrice !== undefined ? updates.costPrice : p.costPrice) || 0;
+            costPriceUSD = Math.round((costPrice / exchangeRate) * 100) / 100;
+          }
+        }
+
         return {
           ...p,
           ...updates,
           name: updates.name !== undefined ? updates.name.trim() : p.name,
           artikul: updates.artikul !== undefined ? updates.artikul.trim() : p.artikul,
-          costPrice: updates.costPrice !== undefined ? Number(updates.costPrice) : p.costPrice,
+          costPrice,
+          costPriceUSD,
+          costCurrency,
           sellPrice: updates.sellPrice !== undefined ? Number(updates.sellPrice) : p.sellPrice,
           quantity: updates.quantity !== undefined ? Number(updates.quantity) : p.quantity,
           supplierId: updates.supplierId !== undefined ? updates.supplierId : p.supplierId,
@@ -253,22 +346,34 @@ export function AppProvider({ children }) {
   const restockProduct = (id, addQty, newCostPrice, newSellPrice, supplierInfo = {}) => {
     const addQuantity = Number(addQty) || 0;
     const now = new Date().toISOString();
-    let effectiveCost = 0;
+    let effectiveCostUZS = 0;
+    let effectiveCostUSD = 0;
     let targetSupplierId = supplierInfo.supplierId || null;
     let targetSupplierName = supplierInfo.supplierName || '';
     const purchaseMode = supplierInfo.purchasePaymentMode || 'cash';
+    const costCurrency = supplierInfo.costCurrency || 'UZS';
 
     const updated = products.map((p) => {
       if (p.id === id) {
-        effectiveCost = newCostPrice !== undefined && newCostPrice !== '' ? Number(newCostPrice) : (p.costPrice || 0);
+        if (costCurrency === 'USD') {
+          effectiveCostUSD = Number(supplierInfo.costPriceUSD !== undefined ? supplierInfo.costPriceUSD : newCostPrice) || p.costPriceUSD || 0;
+          effectiveCostUZS = Math.round(effectiveCostUSD * exchangeRate);
+        } else {
+          effectiveCostUZS = newCostPrice !== undefined && newCostPrice !== '' ? Number(newCostPrice) : (p.costPrice || 0);
+          effectiveCostUSD = Math.round((effectiveCostUZS / exchangeRate) * 100) / 100;
+        }
+
         if (!targetSupplierId && p.supplierId) {
           targetSupplierId = p.supplierId;
           targetSupplierName = p.supplierName || '';
         }
+
         return {
           ...p,
           quantity: Math.max(0, Number((p.quantity + addQuantity).toFixed(2))),
-          costPrice: effectiveCost,
+          costPrice: effectiveCostUZS,
+          costPriceUSD: effectiveCostUSD,
+          costCurrency: costCurrency || p.costCurrency || 'UZS',
           sellPrice: newSellPrice !== undefined && newSellPrice !== '' ? Number(newSellPrice) : p.sellPrice,
           supplierId: targetSupplierId || p.supplierId || null,
           supplierName: targetSupplierName || p.supplierName || '',
@@ -280,8 +385,11 @@ export function AppProvider({ children }) {
     saveProducts(updated);
 
     // If supplier selected and stock added, update supplier accounting
-    if (targetSupplierId && addQuantity > 0 && effectiveCost > 0) {
-      const incomingSum = effectiveCost * addQuantity;
+    if (targetSupplierId && addQuantity > 0 && effectiveCostUZS > 0) {
+      const selectedSup = suppliers.find((s) => s.id === targetSupplierId);
+      const isUSDSupplier = selectedSup?.currency === 'USD';
+      const incomingSum = isUSDSupplier ? (effectiveCostUSD * addQuantity) : (effectiveCostUZS * addQuantity);
+
       const updatedSuppliers = suppliers.map((s) => {
         if (s.id === targetSupplierId) {
           const totalPurchased = (s.totalPurchased || 0) + incomingSum;
@@ -697,12 +805,13 @@ export function AppProvider({ children }) {
       }
     });
 
-    // Warehouse stock valuation
+    // Warehouse stock valuation (in UZS)
     let stockCostValue = 0;
     let stockRetailValue = 0;
     products.forEach((p) => {
       const qty = Number(p.quantity || 0);
-      stockCostValue += Number(p.costPrice || 0) * qty;
+      const cost = p.costCurrency === 'USD' && p.costPriceUSD ? Math.round(p.costPriceUSD * exchangeRate) : (p.costPrice || 0);
+      stockCostValue += cost * qty;
       stockRetailValue += Number(p.sellPrice || 0) * qty;
     });
 
@@ -713,7 +822,8 @@ export function AppProvider({ children }) {
       products.forEach((p) => {
         if (p.supplierId === sup.id) {
           const q = Number(p.quantity || 0);
-          stockCost += (p.costPrice || 0) * q;
+          const cost = p.costCurrency === 'USD' && p.costPriceUSD ? Math.round(p.costPriceUSD * exchangeRate) : (p.costPrice || 0);
+          stockCost += cost * q;
           stockRetail += (p.sellPrice || 0) * q;
         }
       });
@@ -732,8 +842,10 @@ export function AppProvider({ children }) {
 
       return {
         ...sup,
+        currency: sup.currency || 'UZS',
         stockCostValue: stockCost,
         stockRetailValue: stockRetail,
+        stockCostValueUSD: Math.round((stockCost / exchangeRate) * 100) / 100,
         supplierProfit,
       };
     });
@@ -749,6 +861,7 @@ export function AppProvider({ children }) {
       salesCount: filteredSales.length,
       salesList: filteredSales,
       supplierAnalytics,
+      exchangeRate,
     };
   };
 
@@ -790,6 +903,8 @@ export function AppProvider({ children }) {
         updateSupplier,
         deleteSupplier,
         paySupplierDebt,
+        exchangeRate,
+        updateExchangeRate,
         getReportData,
         resetAllData,
         isCloudConnected,

@@ -195,6 +195,16 @@ export const translations = {
   currency: { lotin: "so'm", kirill: "сўм" },
   pieces_unit: { lotin: "ta", kirill: "та" },
 
+  // Currency & Exchange Rate
+  exchange_rate_title: { lotin: "Valyuta kursi (USD / UZS)", kirill: "Валюта курси (УСД / УЗС)" },
+  exchange_rate_desc: { lotin: "1 AQSH dollari ($) ning so'mdagi qiymati", kirill: "1 АҚШ доллари ($) нинг сўмдаги қиймати" },
+  exchange_rate_label: { lotin: "1 USD kursi (so'm)", kirill: "1 УСД курси (сўм)" },
+  exchange_rate_saved: { lotin: "Valyuta kursi muvaffaqiyatli saqlandi!", kirill: "Валюта курси муваффақиятли сақланди!" },
+  cost_currency: { lotin: "Tan narxi valyutasi", kirill: "Тан нархи валютаси" },
+  supplier_currency: { lotin: "Hisob-kitob valyutasi", kirill: "Ҳисоб-китоб валютаси" },
+  usd: { lotin: "USD ($)", kirill: "УСД ($)" },
+  uzs: { lotin: "UZS (so'm)", kirill: "УЗС (сўм)" },
+
   // Suppliers (Yetkazib beruvchilar)
   supplier: { lotin: "Yetkazib beruvchi", kirill: "Етказиб берувчи" },
   suppliers: { lotin: "Yetkazib beruvchilar", kirill: "Етказиб берувчилар" },
