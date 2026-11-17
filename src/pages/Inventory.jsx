@@ -49,6 +49,7 @@ export default function Inventory() {
   const [restockCost, setRestockCost] = useState('');
   const [restockCostCurrency, setRestockCostCurrency] = useState('UZS'); // 'UZS' or 'USD'
   const [restockSell, setRestockSell] = useState('');
+  const [restockSellCurrency, setRestockSellCurrency] = useState('UZS'); // 'UZS' or 'USD'
   const [restockSupplierId, setRestockSupplierId] = useState('');
   const [restockPaymentMode, setRestockPaymentMode] = useState('cash'); // 'cash' or 'credit'
 
@@ -170,13 +171,20 @@ export default function Inventory() {
     setRestockItem(p);
     setRestockQty('');
     const pCostCurr = p.costCurrency || 'UZS';
+    const isUSDInitialSell = p.sellCurrency === 'USD' || Boolean(p.sellPriceUSD) || (p.costCurrency === 'USD' && p.sellPrice > 0 && p.sellPrice <= 1000);
+    const pSellCurr = isUSDInitialSell ? 'USD' : 'UZS';
     setRestockCostCurrency(pCostCurr);
+    setRestockSellCurrency(pSellCurr);
     setRestockCost(
       isAdmin
-        ? (pCostCurr === 'USD' ? (p.costPriceUSD !== undefined ? p.costPriceUSD : '') : (p.costPrice || ''))
+        ? (pCostCurr === 'USD' ? (p.costPriceUSD !== undefined && p.costPriceUSD !== null ? p.costPriceUSD : (Math.round((p.costPrice / exchangeRate) * 100) / 100)) : (p.costPrice || ''))
         : ''
     );
-    setRestockSell(p.sellPrice || '');
+    setRestockSell(
+      pSellCurr === 'USD'
+        ? (p.sellPriceUSD || (p.sellPrice <= 1000 ? p.sellPrice : Math.round((p.sellPrice / exchangeRate) * 100) / 100))
+        : (p.sellPrice || '')
+    );
     setRestockSupplierId(p.supplierId || suppliers[0]?.id || '');
     setRestockPaymentMode('cash');
     setIsRestockOpen(true);
@@ -288,17 +296,24 @@ export default function Inventory() {
     const computedUZS = isUSD ? Math.round(costInputVal * exchangeRate) : costInputVal;
     const computedUSD = isUSD ? costInputVal : (Math.round((costInputVal / exchangeRate) * 100) / 100);
 
+    const isUSDSell = restockSellCurrency === 'USD';
+    const sellInputVal = Number(restockSell) || 0;
+    const computedSellUZS = isUSDSell ? Math.round(sellInputVal * exchangeRate) : sellInputVal;
+    const computedSellUSD = isUSDSell ? sellInputVal : (Math.round((sellInputVal / exchangeRate) * 100) / 100);
+
     restockProduct(
       restockItem.id,
       Number(restockQty),
       isAdmin && restockCost !== '' ? computedUZS : restockItem.costPrice,
-      restockSell !== '' ? Number(restockSell) : restockItem.sellPrice,
+      restockSell !== '' ? computedSellUZS : restockItem.sellPrice,
       {
         supplierId: restockSupplierId || null,
         supplierName: selectedSup ? selectedSup.name : '',
         purchasePaymentMode: restockPaymentMode || 'cash',
         costCurrency: restockCostCurrency,
         costPriceUSD: computedUSD,
+        sellCurrency: restockSellCurrency,
+        sellPriceUSD: computedSellUSD,
       }
     );
 
@@ -703,6 +718,76 @@ export default function Inventory() {
                 </div>
               )}
 
+              {/* Unified Currency Toggle for Modal */}
+              <div className="bg-slate-50 p-2.5 rounded-2xl border border-slate-200 flex items-center justify-between">
+                <div>
+                  <span className="text-xs font-bold text-gray-800 block">Narxlar valyutasi:</span>
+                  <span className="text-[10px] text-gray-500 font-mono">
+                    Kurs: 1$ = {formatUZS(exchangeRate)}
+                  </span>
+                </div>
+                <div className="flex items-center bg-white p-0.5 rounded-xl border border-gray-300 text-xs font-bold shadow-xs">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setFormData((prev) => {
+                        let newCost = prev.costPrice;
+                        let newSell = prev.sellPrice;
+                        if (prev.costCurrency === 'USD' && prev.costPrice) {
+                          newCost = Math.round(Number(prev.costPrice) * exchangeRate);
+                        }
+                        if (prev.sellCurrency === 'USD' && prev.sellPrice) {
+                          newSell = Math.round(Number(prev.sellPrice) * exchangeRate);
+                        }
+                        return {
+                          ...prev,
+                          costCurrency: 'UZS',
+                          sellCurrency: 'UZS',
+                          costPrice: newCost,
+                          sellPrice: newSell,
+                        };
+                      });
+                    }}
+                    className={`px-3 py-1 rounded-lg transition-all ${
+                      formData.costCurrency === 'UZS' && formData.sellCurrency === 'UZS'
+                        ? 'bg-blue-600 text-white shadow-xs'
+                        : 'text-gray-600 hover:text-gray-900'
+                    }`}
+                  >
+                    UZS (so'm)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setFormData((prev) => {
+                        let newCost = prev.costPrice;
+                        let newSell = prev.sellPrice;
+                        if (prev.costCurrency === 'UZS' && prev.costPrice) {
+                          newCost = Math.round((Number(prev.costPrice) / exchangeRate) * 100) / 100;
+                        }
+                        if (prev.sellCurrency === 'UZS' && prev.sellPrice) {
+                          newSell = Math.round((Number(prev.sellPrice) / exchangeRate) * 100) / 100;
+                        }
+                        return {
+                          ...prev,
+                          costCurrency: 'USD',
+                          sellCurrency: 'USD',
+                          costPrice: newCost,
+                          sellPrice: newSell,
+                        };
+                      });
+                    }}
+                    className={`px-3 py-1 rounded-lg transition-all ${
+                      formData.costCurrency === 'USD' || formData.sellCurrency === 'USD'
+                        ? 'bg-emerald-600 text-white shadow-xs'
+                        : 'text-gray-600 hover:text-gray-900'
+                    }`}
+                  >
+                    USD ($)
+                  </button>
+                </div>
+              </div>
+
               {/* Cost Price & Selling Price Fields - MANDATORY FOR ADMIN */}
               {isAdmin ? (
                 <div className="space-y-3">
@@ -1101,17 +1186,62 @@ export default function Inventory() {
               )}
 
               <div>
-                <label className="block text-xs font-semibold text-gray-700 mb-1">
-                  {t('new_sell_price')} (so'm)
-                </label>
-                <input
-                  type="number"
-                  step="any"
-                  placeholder="Sotuv narxi"
-                  value={restockSell}
-                  onChange={(e) => setRestockSell(e.target.value)}
-                  className="input-field text-sm"
-                />
+                <div className="flex items-center justify-between mb-1">
+                  <label className="block text-xs font-semibold text-gray-700">
+                    {t('new_sell_price')}
+                  </label>
+                  <div className="flex items-center bg-blue-50 p-0.5 rounded-lg border border-blue-200 text-[10px] font-bold">
+                    <button
+                      type="button"
+                      onClick={() => setRestockSellCurrency('UZS')}
+                      className={`px-2 py-0.5 rounded transition-all ${
+                        restockSellCurrency === 'UZS'
+                          ? 'bg-blue-600 text-white shadow-xs'
+                          : 'text-blue-700 hover:text-blue-900'
+                      }`}
+                    >
+                      UZS (so'm)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setRestockSellCurrency('USD')}
+                      className={`px-2 py-0.5 rounded transition-all ${
+                        restockSellCurrency === 'USD'
+                          ? 'bg-blue-600 text-white shadow-xs'
+                          : 'text-blue-700 hover:text-blue-900'
+                      }`}
+                    >
+                      USD ($)
+                    </button>
+                  </div>
+                </div>
+
+                <div className="relative">
+                  {restockSellCurrency === 'USD' && (
+                    <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-blue-600 font-bold text-sm">
+                      $
+                    </div>
+                  )}
+                  <input
+                    type="number"
+                    step="any"
+                    placeholder={restockSellCurrency === 'USD' ? "Sotuv narxi ($)" : "Sotuv narxi (so'm)"}
+                    value={restockSell}
+                    onChange={(e) => setRestockSell(e.target.value)}
+                    className={`input-field text-sm font-mono ${
+                      restockSellCurrency === 'USD' ? 'pl-7' : ''
+                    }`}
+                  />
+                </div>
+
+                {/* Live conversion helper */}
+                {restockSell && Number(restockSell) > 0 && (
+                  <p className="text-[11px] text-blue-600 mt-1 font-mono font-medium">
+                    {restockSellCurrency === 'USD'
+                      ? `≈ ${formatUZS(Math.round(Number(restockSell) * exchangeRate))} (kurs: 1$ = ${formatUZS(exchangeRate)})`
+                      : `≈ $${formatUSD(Number(restockSell) / exchangeRate)} (kurs: 1$ = ${formatUZS(exchangeRate)})`}
+                  </p>
+                )}
               </div>
 
               <div className="flex items-center justify-end gap-2 pt-3 border-t border-gray-100">

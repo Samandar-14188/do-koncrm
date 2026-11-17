@@ -1047,6 +1047,65 @@ export function AppProvider({ children }) {
   };
 
   // ==========================================
+  // BACKUP & RESTORE (EXPORT / IMPORT JSON)
+  // ==========================================
+  const exportBackupData = () => {
+    return {
+      version: '1.0',
+      appName: 'DokonCRM',
+      exportDate: new Date().toISOString(),
+      exchangeRate,
+      products,
+      debtors,
+      sales,
+      suppliers,
+    };
+  };
+
+  const importBackupData = async (backup) => {
+    if (!backup || typeof backup !== 'object') {
+      throw new Error("Noto'g'ri fayl formati!");
+    }
+
+    const newProducts = Array.isArray(backup.products) ? backup.products : [];
+    const newDebtors = Array.isArray(backup.debtors) ? backup.debtors : [];
+    const newSales = Array.isArray(backup.sales) ? backup.sales : [];
+    const newSuppliers = Array.isArray(backup.suppliers) ? backup.suppliers : [];
+    const newRate = Number(backup.exchangeRate) || exchangeRate || 12800;
+
+    setProducts(newProducts);
+    setDebtors(newDebtors);
+    setSales(newSales);
+    setSuppliers(newSuppliers);
+    setExchangeRate(newRate);
+
+    storage.set('initialized', true);
+    storage.set('products', newProducts);
+    storage.set('debtors', newDebtors);
+    storage.set('sales', newSales);
+    storage.set('suppliers', newSuppliers);
+    storage.set('exchange_rate', newRate);
+
+    if (isSupabaseConnected()) {
+      await clearCloudTables();
+      await Promise.allSettled([
+        syncToCloud('products', newProducts),
+        syncToCloud('debtors', newDebtors),
+        syncToCloud('sales', newSales),
+        syncToCloud('suppliers', newSuppliers),
+        saveCloudExchangeRate(newRate),
+      ]);
+    }
+
+    return {
+      productsCount: newProducts.length,
+      debtorsCount: newDebtors.length,
+      salesCount: newSales.length,
+      suppliersCount: newSuppliers.length,
+    };
+  };
+
+  // ==========================================
   // RESET ALL DATA TO ZERO (EMPTY STORE)
   // ==========================================
   const resetAllData = async () => {
@@ -1088,6 +1147,8 @@ export function AppProvider({ children }) {
         updateExchangeRate,
         getReportData,
         resetAllData,
+        exportBackupData,
+        importBackupData,
         isCloudConnected,
         setIsCloudConnected,
       }}

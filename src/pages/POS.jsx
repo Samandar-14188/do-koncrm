@@ -486,10 +486,10 @@ export default function POS() {
         </div>
 
         {/* Right Column: Desktop Cart (4 cols on desktop, comfortable width) */}
-        <div className="hidden lg:block lg:col-span-4 sticky top-20 min-w-0">
-          <div className="bg-white rounded-3xl shadow-sm border border-gray-200 p-4 flex flex-col max-h-[calc(100vh-6rem)] min-w-0">
+        <div className="hidden lg:block lg:col-span-4 sticky top-16 z-20 min-w-0">
+          <div className="bg-white rounded-3xl shadow-sm border border-gray-200 p-3 sm:p-3.5 flex flex-col max-h-[calc(100vh-100px)] overflow-hidden min-w-0">
             {/* Cart Header */}
-            <div className="flex items-center justify-between pb-3 border-b border-gray-100">
+            <div className="shrink-0 flex items-center justify-between pb-2 border-b border-gray-100">
               <div className="flex items-center gap-2">
                 <ShoppingCart className="w-5 h-5 text-blue-600" />
                 <h3 className="font-bold text-gray-900 text-sm xl:text-base">{t('cart')}</h3>
@@ -510,7 +510,7 @@ export default function POS() {
 
             {/* Global Cart Currency Toggle */}
             {cart.length > 0 && (
-              <div className="flex items-center justify-between py-2 border-b border-gray-100">
+              <div className="shrink-0 flex items-center justify-between py-1.5 border-b border-gray-100">
                 <span className="text-[11px] font-bold text-gray-500">
                   Valyuta:
                 </span>
@@ -542,7 +542,7 @@ export default function POS() {
             )}
 
             {/* Cart Items List */}
-            <div className="flex-1 overflow-y-auto py-3 space-y-3 scrollbar-thin">
+            <div className="flex-1 overflow-y-auto pr-1 py-2 space-y-2 min-h-0 scrollbar-thin">
               {cart.length === 0 ? (
                 <div className="py-12 text-center">
                   <ShoppingCart className="w-10 h-10 text-gray-300 mx-auto mb-2" />
@@ -555,7 +555,7 @@ export default function POS() {
                   return (
                     <div
                       key={item.product.id}
-                      className="bg-gray-50/80 rounded-2xl p-3 border border-gray-200/80 space-y-2 min-w-0"
+                      className="bg-gray-50/90 rounded-2xl p-2 sm:p-2.5 border border-gray-200/80 space-y-1.5 min-w-0"
                     >
                       <div className="flex items-start justify-between gap-1">
                         <div className="flex-1 min-w-0">
@@ -579,7 +579,7 @@ export default function POS() {
                       {/* Quantity Selector + Currency Toggle + Price Input */}
                       <div className="grid grid-cols-12 gap-1.5 pt-1 items-center min-w-0">
                         {/* Quantity */}
-                        <div className="col-span-5 flex items-center bg-white border border-gray-200 rounded-xl px-1 py-1 justify-between min-w-0">
+                        <div className="col-span-5 flex items-center bg-white border border-gray-200 rounded-xl px-1 py-0.5 justify-between min-w-0">
                           <button
                             onClick={() => updateQuantity(item.product.id, item.quantity - 1)}
                             className="w-5 h-5 rounded-lg bg-gray-100 flex items-center justify-center text-gray-600 hover:bg-gray-200 flex-shrink-0"
@@ -643,7 +643,7 @@ export default function POS() {
                               placeholder={isUSD ? "15" : "180000"}
                               value={item.priceInput !== undefined ? item.priceInput : (isUSD ? priceUSD : priceUZS)}
                               onChange={(e) => updatePriceInput(item.product.id, e.target.value)}
-                              className={`w-full py-1 text-xs font-bold rounded-xl border text-right focus:outline-none focus:ring-1 min-w-0 ${
+                              className={`w-full py-0.5 text-xs font-bold rounded-xl border text-right focus:outline-none focus:ring-1 min-w-0 ${
                                 isUSD ? 'pl-4 pr-1.5' : 'px-1.5'
                               } ${
                                 isBelowCost
@@ -692,16 +692,16 @@ export default function POS() {
               )}
             </div>
 
-            {/* Cart Footer */}
+            {/* Cart Footer - ALWAYS VISIBLE (sticky bottom-0 shrink-0) */}
             {cart.length > 0 && (
-              <div className="pt-3 border-t border-gray-100 space-y-2.5">
-                <div className="flex items-center justify-between text-sm">
-                  <span className="font-medium text-gray-500">{t('total')}:</span>
+              <div className="shrink-0 sticky bottom-0 bg-white pt-2.5 border-t border-gray-100 space-y-2 z-10">
+                <div className="flex items-center justify-between text-xs sm:text-sm">
+                  <span className="font-semibold text-gray-500">{t('total')}:</span>
                   <div className="text-right ml-2">
-                    <span className="text-lg xl:text-xl font-black text-blue-700">
+                    <span className="text-base sm:text-lg xl:text-xl font-black text-blue-700">
                       ${formatUSD(cartTotals.totalUSD).replace('$', '')}
                     </span>
-                    <span className="text-xs text-gray-500 font-bold block">
+                    <span className="text-[11px] sm:text-xs text-gray-500 font-bold block font-mono">
                       ({formatUZS(cartTotals.total)})
                     </span>
                   </div>
@@ -709,9 +709,9 @@ export default function POS() {
 
                 <button
                   onClick={handleOpenCheckout}
-                  className="w-full btn-primary py-3 text-xs xl:text-sm font-bold flex items-center justify-center gap-1.5 rounded-2xl shadow-lg shadow-blue-500/25 active:scale-95"
+                  className="w-full btn-primary py-2.5 sm:py-3 text-xs sm:text-sm font-bold flex items-center justify-center gap-1.5 rounded-2xl shadow-md shadow-blue-500/20 active:scale-95"
                 >
-                  <ShoppingCart className="w-4 h-4" />
+                  <ShoppingCart className="w-4 h-4 flex-shrink-0" />
                   <span className="truncate">
                     {t('sell_button')} (${formatUSD(cartTotals.totalUSD).replace('$', '')} / {formatMoney(cartTotals.total)} so'm)
                   </span>

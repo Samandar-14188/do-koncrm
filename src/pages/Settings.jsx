@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useLanguage } from '../context/LangContext';
 import { useAuth } from '../context/AuthContext';
 import { useApp } from '../context/AppContext';
@@ -14,13 +14,23 @@ import {
   Shield,
   ArrowLeftRight,
   Loader2,
-  DollarSign
+  DollarSign,
+  Download,
+  Upload,
+  Database
 } from 'lucide-react';
 
 export default function Settings() {
   const { t, lang, toggleLang } = useLanguage();
   const { isAdmin, updatePasswords } = useAuth();
-  const { resetAllData, isCloudConnected, exchangeRate, updateExchangeRate } = useApp();
+  const {
+    resetAllData,
+    isCloudConnected,
+    exchangeRate,
+    updateExchangeRate,
+    exportBackupData,
+    importBackupData,
+  } = useApp();
 
   // Exchange Rate State (Admin only)
   const [rateInput, setRateInput] = useState(exchangeRate || 12800);
@@ -40,6 +50,12 @@ export default function Settings() {
   const [passSaveMsg, setPassSaveMsg] = useState('');
   const [passSaveToast, setPassSaveToast] = useState(false);
   const [isSavingPass, setIsSavingPass] = useState(false);
+
+  // Backup & Restore State (Admin only)
+  const fileInputRef = useRef(null);
+  const [isExporting, setIsExporting] = useState(false);
+  const [isImporting, setIsImporting] = useState(false);
+  const [backupToastMsg, setBackupToastMsg] = useState('');
 
   // Reset confirmation state
   const [isResetConfirmOpen, setIsResetConfirmOpen] = useState(false);
@@ -117,6 +133,82 @@ export default function Settings() {
     }
   };
 
+  // Export Database to JSON
+  const handleExportJSON = () => {
+    if (!isAdmin) return;
+    setIsExporting(true);
+    try {
+      const data = exportBackupData();
+      const jsonString = JSON.stringify(data, null, 2);
+      const blob = new Blob([jsonString], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      const today = new Date().toISOString().slice(0, 10);
+      a.href = url;
+      a.download = `DokonCRM_Backup_${today}.json`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+
+      setBackupToastMsg("Ma'lumotlar bazasi zaxira nusxasi (JSON) muvaffaqiyatli yuklab olindi!");
+      setTimeout(() => setBackupToastMsg(''), 4000);
+    } catch (err) {
+      console.error("Backup export error:", err);
+      alert("Zaxira nusxani eksport qilishda xatolik yuz berdi");
+    } finally {
+      setIsExporting(false);
+    }
+  };
+
+  // Trigger File Import Dialog
+  const handleImportClick = () => {
+    if (!isAdmin) return;
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+      fileInputRef.current.click();
+    }
+  };
+
+  // Process Imported JSON File
+  const handleFileChange = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const confirmRestore = window.confirm(
+      "Diqqat! Yuklanayotgan zaxira faylidagi barcha ma'lumotlar (mahsulotlar, qarzlar, sotuvlar, yetkazib beruvchilar) joriy bazani to'liq almashtiradi.\n\nDavom etishni xohlaysizmi?"
+    );
+    if (!confirmRestore) {
+      e.target.value = '';
+      return;
+    }
+
+    setIsImporting(true);
+    try {
+      const text = await file.text();
+      const parsed = JSON.parse(text);
+
+      if (!parsed || (typeof parsed !== 'object')) {
+        throw new Error("Fayl formati yaroqsiz");
+      }
+
+      const res = await importBackupData(parsed);
+      setBackupToastMsg(
+        `Baza muvaffaqiyatli tiklandi! (${res.productsCount} ta tovar, ${res.salesCount} ta sotuv). Sahifa yangilanmoqda...`
+      );
+
+      setTimeout(() => {
+        window.location.reload();
+      }, 1500);
+    } catch (err) {
+      console.error("Backup import error:", err);
+      alert("Zaxira faylini tiklashda xatolik yuz berdi: " + (err.message || "Fayl yaroqsiz"));
+    } finally {
+      setIsImporting(false);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    }
+  };
+
   // Reset all data completely to ZERO (Empty store in localStorage & Supabase)
   const handleConfirmReset = async () => {
     if (!isAdmin) return;
@@ -160,6 +252,14 @@ export default function Settings() {
         <div className="fixed top-16 right-4 z-50 bg-emerald-600 text-white px-5 py-3 rounded-2xl shadow-xl flex items-center gap-2 text-sm font-bold animate-fade-in">
           <CheckCircle2 className="w-5 h-5 flex-shrink-0" />
           <span>{resetSuccessMsg}</span>
+        </div>
+      )}
+
+      {/* Toast Alert for Backup & Restore */}
+      {backupToastMsg && (
+        <div className="fixed top-16 right-4 z-50 bg-emerald-600 text-white px-5 py-3 rounded-2xl shadow-xl flex items-center gap-2 text-sm font-bold animate-fade-in">
+          <CheckCircle2 className="w-5 h-5 flex-shrink-0" />
+          <span>{backupToastMsg}</span>
         </div>
       )}
 
@@ -378,7 +478,81 @@ export default function Settings() {
         </div>
       )}
 
-      {/* 4. Reset All Data to ZERO (Empty Store - Admin Only) */}
+      {/* 4. Backup & Restore (JSON Export & Import - Admin Only) */}
+      {isAdmin && (
+        <div className="bg-white rounded-3xl p-5 border border-gray-200 shadow-sm space-y-4 min-w-0">
+          <div className="flex items-center gap-2.5 min-w-0">
+            <div className="w-9 h-9 rounded-2xl bg-indigo-100 text-indigo-700 flex items-center justify-center font-bold flex-shrink-0">
+              <Database className="w-5 h-5" />
+            </div>
+            <div className="min-w-0">
+              <h3 className="font-bold text-sm text-gray-900 truncate">
+                Ma'lumotlar bazasini saqlash va tiklash (Zaxira)
+              </h3>
+              <p className="text-xs text-gray-500 truncate">
+                Barcha tovarlar, sotuvlar, qarzdorlar va hisobotlarni JSON fayl sifatida yuklab olish yoki tiklash
+              </p>
+            </div>
+          </div>
+
+          <div className="bg-slate-50 border border-slate-200 rounded-2xl p-3 text-xs text-slate-600 leading-relaxed">
+            💾 <strong>Zaxira nusxasi:</strong> Kompyuterni almashtirganda yoki ma'lumotlarni xavfsiz saqlash uchun JSON faylni yuklab oling. Keyinchalik ushbu faylni istalgan qurilmada qayta tiklashingiz mumkin.
+          </div>
+
+          {/* Hidden File Input */}
+          <input
+            type="file"
+            ref={fileInputRef}
+            accept=".json"
+            onChange={handleFileChange}
+            className="hidden"
+          />
+
+          <div className="flex flex-wrap items-center gap-2.5 pt-1">
+            {/* Export Button */}
+            <button
+              type="button"
+              disabled={isExporting || isImporting}
+              onClick={handleExportJSON}
+              className="btn-primary py-2.5 px-4 text-xs font-bold rounded-xl flex items-center gap-2 active:scale-95 transition-all shadow-sm"
+            >
+              {isExporting ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  <span>Eksport qilinmoqda...</span>
+                </>
+              ) : (
+                <>
+                  <Download className="w-4 h-4" />
+                  <span>Bazani saqlash (Eksport JSON)</span>
+                </>
+              )}
+            </button>
+
+            {/* Import Button */}
+            <button
+              type="button"
+              disabled={isExporting || isImporting}
+              onClick={handleImportClick}
+              className="btn-secondary py-2.5 px-4 text-xs font-bold rounded-xl flex items-center gap-2 border-slate-300 text-slate-700 hover:bg-slate-100 active:scale-95 transition-all shadow-xs"
+            >
+              {isImporting ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  <span>Tiklanmoqda...</span>
+                </>
+              ) : (
+                <>
+                  <Upload className="w-4 h-4 text-indigo-600" />
+                  <span>Fayldan tiklash (Import JSON)</span>
+                </>
+              )}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* 5. Reset All Data to ZERO (Empty Store - Admin Only) */}
       {isAdmin && (
         <div className="bg-red-50/60 rounded-3xl p-5 border border-red-200 shadow-sm space-y-3 min-w-0">
           <div className="flex items-center gap-2.5 min-w-0">
