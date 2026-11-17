@@ -443,8 +443,8 @@ export default function Reports() {
                         <span className="text-[10px] font-semibold text-gray-500 block truncate">
                           {t('supplier_profit')}
                         </span>
-                        <p className="font-bold text-emerald-700 font-mono mt-1 text-sm truncate">
-                          +{formatUZS(sup.supplierProfit)}
+                        <p className={`font-bold font-mono mt-1 text-sm truncate ${sup.supplierProfit < 0 ? 'text-red-600' : 'text-emerald-700'}`}>
+                          {sup.supplierProfit > 0 ? `+${formatUZS(sup.supplierProfit)}` : formatUZS(sup.supplierProfit)}
                         </p>
                       </div>
 
@@ -568,8 +568,8 @@ export default function Reports() {
                         }
                       </span>
                     </td>
-                    <td className="py-2.5 font-bold font-mono text-emerald-700 whitespace-nowrap">
-                      +{formatUZS(s.realizedProfit)}
+                    <td className={`py-2.5 font-bold font-mono whitespace-nowrap ${s.realizedProfit < 0 ? 'text-red-600' : 'text-emerald-700'}`}>
+                      {s.realizedProfit > 0 ? `+${formatUZS(s.realizedProfit)}` : formatUZS(s.realizedProfit)}
                     </td>
                   </tr>
                 ))}

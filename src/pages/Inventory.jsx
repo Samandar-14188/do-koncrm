@@ -69,6 +69,8 @@ export default function Inventory() {
     costCurrency: 'UZS', // 'UZS' or 'USD'
     costPriceUSD: '',
     sellPrice: '',
+    sellCurrency: 'UZS', // 'UZS' or 'USD'
+    sellPriceUSD: '',
     quantity: '',
     supplierId: '',
     supplierName: '',
@@ -124,6 +126,8 @@ export default function Inventory() {
       costCurrency: defaultSup?.currency || 'UZS',
       costPriceUSD: '',
       sellPrice: '',
+      sellCurrency: defaultSup?.currency || 'UZS',
+      sellPriceUSD: '',
       quantity: '',
       supplierId: defaultSup?.id || '',
       supplierName: defaultSup?.name || '',
@@ -136,6 +140,12 @@ export default function Inventory() {
   const handleOpenEdit = (p) => {
     setEditingProduct(p);
     const costCurr = p.costCurrency || (p.costPriceUSD && !p.costPrice ? 'USD' : 'UZS');
+    const isUSDInitialSell = p.sellCurrency === 'USD' || Boolean(p.sellPriceUSD) || (p.costCurrency === 'USD' && p.sellPrice > 0 && p.sellPrice <= 1000);
+    const sellCurr = isUSDInitialSell ? 'USD' : 'UZS';
+    const sellDisplay = sellCurr === 'USD'
+      ? (p.sellPriceUSD || (p.sellPrice <= 1000 ? p.sellPrice : Math.round((p.sellPrice / exchangeRate) * 100) / 100))
+      : p.sellPrice;
+
     setFormData({
       name: p.name,
       artikul: p.artikul || '',
@@ -144,7 +154,9 @@ export default function Inventory() {
         ? (costCurr === 'USD' ? (p.costPriceUSD !== undefined ? p.costPriceUSD : '') : (p.costPrice || ''))
         : '',
       costPriceUSD: isAdmin ? (p.costPriceUSD || '') : '',
-      sellPrice: p.sellPrice || '',
+      sellCurrency: sellCurr,
+      sellPrice: sellDisplay || '',
+      sellPriceUSD: p.sellPriceUSD || '',
       quantity: p.quantity,
       supplierId: p.supplierId || '',
       supplierName: p.supplierName || '',
@@ -219,6 +231,11 @@ export default function Inventory() {
     const computedUZS = isUSD ? Math.round(costInputVal * exchangeRate) : costInputVal;
     const computedUSD = isUSD ? costInputVal : (Math.round((costInputVal / exchangeRate) * 100) / 100);
 
+    const isUSDSell = formData.sellCurrency === 'USD';
+    const sellInputVal = Number(formData.sellPrice) || 0;
+    const computedSellUZS = isUSDSell ? Math.round(sellInputVal * exchangeRate) : sellInputVal;
+    const computedSellUSD = isUSDSell ? sellInputVal : (Math.round((sellInputVal / exchangeRate) * 100) / 100);
+
     if (editingProduct) {
       updateProduct(editingProduct.id, {
         name: formData.name,
@@ -227,7 +244,9 @@ export default function Inventory() {
         // If seller is editing, keep original costPrice untouched
         costPrice: isAdmin ? computedUZS : editingProduct.costPrice,
         costPriceUSD: isAdmin ? computedUSD : editingProduct.costPriceUSD,
-        sellPrice: Number(formData.sellPrice) || 0,
+        sellCurrency: formData.sellCurrency,
+        sellPrice: computedSellUZS,
+        sellPriceUSD: computedSellUSD,
         quantity: Number(formData.quantity) || 0,
         supplierId: formData.supplierId || null,
         supplierName: selectedSup ? selectedSup.name : (formData.supplierName || ''),
@@ -240,7 +259,9 @@ export default function Inventory() {
         costCurrency: formData.costCurrency,
         costPrice: isAdmin ? computedUZS : 0,
         costPriceUSD: isAdmin ? computedUSD : 0,
-        sellPrice: Number(formData.sellPrice) || 0,
+        sellCurrency: formData.sellCurrency,
+        sellPrice: computedSellUZS,
+        sellPriceUSD: computedSellUSD,
         quantity: Number(formData.quantity) || 0,
         supplierId: formData.supplierId || null,
         supplierName: selectedSup ? selectedSup.name : '',
@@ -494,7 +515,22 @@ export default function Inventory() {
                   <div className="bg-gray-50/80 rounded-xl p-2.5 mt-3 space-y-1 text-xs min-w-0">
                     <div className="flex items-center justify-between min-w-0">
                       <span className="text-gray-500 font-medium truncate">{t('sell_price')}:</span>
-                      <span className="font-bold text-gray-900 text-sm truncate ml-1">{formatUZS(p.sellPrice)}</span>
+                      {(() => {
+                        const isUSDSell = p.sellCurrency === 'USD' || Boolean(p.sellPriceUSD) || (p.costCurrency === 'USD' && p.sellPrice > 0 && p.sellPrice <= 1000);
+                        const pUSD = p.sellPriceUSD || (isUSDSell ? p.sellPrice : Math.round((p.sellPrice / exchangeRate) * 100) / 100);
+                        const pUZS = isUSDSell && p.sellPrice <= 1000 ? Math.round(pUSD * exchangeRate) : p.sellPrice;
+
+                        if (isUSDSell) {
+                          return (
+                            <span className="font-bold text-gray-900 text-sm truncate ml-1 font-mono">
+                              ${formatUSD(pUSD).replace('$', '')} <span className="text-[11px] text-gray-500 font-sans font-normal">({formatUZS(pUZS)})</span>
+                            </span>
+                          );
+                        }
+                        return (
+                          <span className="font-bold text-gray-900 text-sm truncate ml-1">{formatUZS(p.sellPrice)}</span>
+                        );
+                      })()}
                     </div>
 
                     {/* Tan Narxi: STRICTLY HIDDEN from seller role */}
@@ -732,37 +768,127 @@ export default function Inventory() {
                   </div>
 
                   <div>
-                    <label className="block text-xs font-semibold text-gray-700 mb-1">
-                      {t('sell_price')} (so'm) *
-                    </label>
-                    <input
-                      type="number"
-                      step="any"
-                      min="0"
-                      required
-                      placeholder="140000"
-                      value={formData.sellPrice}
-                      onChange={(e) => setFormData({ ...formData, sellPrice: e.target.value })}
-                      className="input-field font-semibold text-blue-700 font-mono"
-                    />
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="block text-xs font-semibold text-gray-700">
+                        {t('sell_price')} *
+                      </label>
+                      <div className="flex items-center bg-blue-50 p-0.5 rounded-lg border border-blue-200 text-[10px] font-bold">
+                        <button
+                          type="button"
+                          onClick={() => setFormData({ ...formData, sellCurrency: 'UZS' })}
+                          className={`px-2 py-0.5 rounded transition-all ${
+                            formData.sellCurrency === 'UZS'
+                              ? 'bg-blue-600 text-white shadow-xs'
+                              : 'text-blue-700 hover:text-blue-900'
+                          }`}
+                        >
+                          UZS (so'm)
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setFormData({ ...formData, sellCurrency: 'USD' })}
+                          className={`px-2 py-0.5 rounded transition-all ${
+                            formData.sellCurrency === 'USD'
+                              ? 'bg-blue-600 text-white shadow-xs'
+                              : 'text-blue-700 hover:text-blue-900'
+                          }`}
+                        >
+                          USD ($)
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="relative">
+                      {formData.sellCurrency === 'USD' && (
+                        <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-blue-600 font-bold text-sm">
+                          $
+                        </div>
+                      )}
+                      <input
+                        type="number"
+                        step="any"
+                        min="0"
+                        required
+                        placeholder={formData.sellCurrency === 'USD' ? "19" : "140000"}
+                        value={formData.sellPrice}
+                        onChange={(e) => setFormData({ ...formData, sellPrice: e.target.value })}
+                        className={`input-field font-semibold text-blue-700 font-mono ${
+                          formData.sellCurrency === 'USD' ? 'pl-7' : ''
+                        }`}
+                      />
+                    </div>
+
+                    {/* Live conversion helper */}
+                    {formData.sellPrice && Number(formData.sellPrice) > 0 && (
+                      <p className="text-[11px] text-blue-600 mt-1 font-mono font-medium">
+                        {formData.sellCurrency === 'USD'
+                          ? `≈ ${formatUZS(Math.round(Number(formData.sellPrice) * exchangeRate))} (kurs: 1$ = ${formatUZS(exchangeRate)})`
+                          : `≈ $${formatUSD(Number(formData.sellPrice) / exchangeRate)} (kurs: 1$ = ${formatUZS(exchangeRate)})`}
+                      </p>
+                    )}
                   </div>
                 </div>
               ) : (
                 /* SELLER VIEW: Tan narxi is completely HIDDEN */
                 <div>
-                  <label className="block text-xs font-semibold text-gray-700 mb-1">
-                    {t('sell_price')} (so'm) *
-                  </label>
-                  <input
-                    type="number"
-                    step="any"
-                    min="0"
-                    required
-                    placeholder="140000"
-                    value={formData.sellPrice}
-                    onChange={(e) => setFormData({ ...formData, sellPrice: e.target.value })}
-                    className="input-field font-semibold text-blue-700 font-mono"
-                  />
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="block text-xs font-semibold text-gray-700">
+                      {t('sell_price')} *
+                    </label>
+                    <div className="flex items-center bg-blue-50 p-0.5 rounded-lg border border-blue-200 text-[10px] font-bold">
+                      <button
+                        type="button"
+                        onClick={() => setFormData({ ...formData, sellCurrency: 'UZS' })}
+                        className={`px-2 py-0.5 rounded transition-all ${
+                          formData.sellCurrency === 'UZS'
+                            ? 'bg-blue-600 text-white shadow-xs'
+                            : 'text-blue-700 hover:text-blue-900'
+                        }`}
+                      >
+                        UZS (so'm)
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setFormData({ ...formData, sellCurrency: 'USD' })}
+                        className={`px-2 py-0.5 rounded transition-all ${
+                          formData.sellCurrency === 'USD'
+                            ? 'bg-blue-600 text-white shadow-xs'
+                            : 'text-blue-700 hover:text-blue-900'
+                        }`}
+                      >
+                        USD ($)
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="relative">
+                    {formData.sellCurrency === 'USD' && (
+                      <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-blue-600 font-bold text-sm">
+                        $
+                      </div>
+                    )}
+                    <input
+                      type="number"
+                      step="any"
+                      min="0"
+                      required
+                      placeholder={formData.sellCurrency === 'USD' ? "19" : "140000"}
+                      value={formData.sellPrice}
+                      onChange={(e) => setFormData({ ...formData, sellPrice: e.target.value })}
+                      className={`input-field font-semibold text-blue-700 font-mono ${
+                        formData.sellCurrency === 'USD' ? 'pl-7' : ''
+                      }`}
+                    />
+                  </div>
+
+                  {/* Live conversion helper */}
+                  {formData.sellPrice && Number(formData.sellPrice) > 0 && (
+                    <p className="text-[11px] text-blue-600 mt-1 font-mono font-medium">
+                      {formData.sellCurrency === 'USD'
+                        ? `≈ ${formatUZS(Math.round(Number(formData.sellPrice) * exchangeRate))} (kurs: 1$ = ${formatUZS(exchangeRate)})`
+                        : `≈ $${formatUSD(Number(formData.sellPrice) / exchangeRate)} (kurs: 1$ = ${formatUZS(exchangeRate)})`}
+                    </p>
+                  )}
                 </div>
               )}
 

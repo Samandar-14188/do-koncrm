@@ -2,7 +2,7 @@ import React, { useState, useMemo } from 'react';
 import { useLanguage } from '../context/LangContext';
 import { useAuth } from '../context/AuthContext';
 import { useApp } from '../context/AppContext';
-import { formatMoney, formatUZS } from '../utils/helpers';
+import { formatMoney, formatUZS, formatUSD } from '../utils/helpers';
 import {
   Search,
   ShoppingCart,
@@ -18,18 +18,19 @@ import {
   User,
   Package,
   X,
-  ChevronRight
+  ChevronRight,
+  DollarSign
 } from 'lucide-react';
 
 export default function POS() {
   const { t, transliterate } = useLanguage();
   const { isAdmin } = useAuth();
-  const { products, processSale, debtors } = useApp();
+  const { products, processSale, debtors, exchangeRate } = useApp();
 
   // Search & Filters
   const [searchQuery, setSearchQuery] = useState('');
 
-  // Cart State: array of { product, quantity, bargainPrice }
+  // Cart State: array of { product, quantity, currency: 'UZS' | 'USD', priceInput }
   const [cart, setCart] = useState([]);
 
   // Mobile cart drawer toggle
@@ -51,6 +52,40 @@ export default function POS() {
   // Success Feedback
   const [saleSuccessMessage, setSaleSuccessMessage] = useState('');
 
+  // Helper to extract effective prices in UZS and USD for a cart item
+  const getItemEffectivePrices = (item) => {
+    const isUSD = item.currency === 'USD';
+    const rate = exchangeRate || 12000;
+    let inputVal = item.priceInput;
+
+    if (inputVal === undefined || inputVal === '') {
+      if (isUSD) {
+        inputVal = item.product.sellPriceUSD || (item.product.sellPrice <= 1000 ? item.product.sellPrice : Math.round((item.product.sellPrice / rate) * 100) / 100);
+      } else {
+        inputVal = item.product.sellPrice > 1000 ? item.product.sellPrice : Math.round((item.product.sellPriceUSD || item.product.sellPrice) * rate);
+      }
+    }
+
+    const numVal = Number(inputVal) || 0;
+    const priceUZS = isUSD ? Math.round(numVal * rate) : numVal;
+    const priceUSD = isUSD ? numVal : (Math.round((numVal / rate) * 100) / 100);
+
+    const prodCostUZS = (item.product.costCurrency === 'USD' && item.product.costPrice <= 1000)
+      ? Math.round(Number(item.product.costPrice) * rate)
+      : Number(item.product.costPrice || 0);
+
+    const isBelowCost = prodCostUZS > 0 && priceUZS < prodCostUZS;
+
+    return {
+      isUSD,
+      numVal,
+      priceUZS,
+      priceUSD,
+      prodCostUZS,
+      isBelowCost,
+    };
+  };
+
   // Filtered Products for POS
   const filteredProducts = useMemo(() => {
     const q = searchQuery.toLowerCase().trim();
@@ -64,30 +99,46 @@ export default function POS() {
 
   // Cart Calculations
   const cartTotals = useMemo(() => {
-    let total = 0;
-    let totalCost = 0;
+    let total = 0; // UZS
+    let totalCost = 0; // UZS
     let itemCount = 0;
+    let totalUSD = 0;
 
     cart.forEach((item) => {
-      const price = Number(item.bargainPrice !== undefined && item.bargainPrice !== '' ? item.bargainPrice : item.product.sellPrice);
-      const cost = Number(item.product.costPrice || 0);
-      const qty = Number(item.quantity);
-      total += price * qty;
-      totalCost += cost * qty;
+      const { priceUZS, priceUSD, prodCostUZS } = getItemEffectivePrices(item);
+      const qty = Number(item.quantity) || 1;
+      total += priceUZS * qty;
+      totalUSD += priceUSD * qty;
+      totalCost += prodCostUZS * qty;
       itemCount += 1;
     });
 
+    const rate = exchangeRate || 12000;
+    const calculatedUSD = Math.round((total / rate) * 100) / 100;
+
     return {
-      total,
+      total, // UZS
+      totalUSD: Math.round(totalUSD * 100) / 100 || calculatedUSD,
       totalCost,
       totalProfit: total - totalCost,
       itemCount,
     };
-  }, [cart]);
+  }, [cart, exchangeRate]);
 
   // Add product to cart
   const addToCart = (product) => {
     if (Number(product.quantity) <= 0) return; // Zero-stock rule
+
+    const rate = exchangeRate || 12000;
+    const isUSDSell = product.sellCurrency === 'USD' || Boolean(product.sellPriceUSD) || (product.costCurrency === 'USD' && product.sellPrice > 0 && product.sellPrice <= 1000);
+    const defaultCurr = isUSDSell ? 'USD' : 'UZS';
+
+    let defaultPriceInput = '';
+    if (defaultCurr === 'USD') {
+      defaultPriceInput = product.sellPriceUSD || (product.sellPrice <= 1000 ? product.sellPrice : Math.round((product.sellPrice / rate) * 100) / 100);
+    } else {
+      defaultPriceInput = product.sellPrice > 1000 ? product.sellPrice : Math.round((product.sellPriceUSD || product.sellPrice) * rate);
+    }
 
     setCart((prev) => {
       const existingIndex = prev.findIndex((it) => it.product.id === product.id);
@@ -103,7 +154,8 @@ export default function POS() {
         {
           product,
           quantity: 1,
-          bargainPrice: product.sellPrice,
+          currency: defaultCurr,
+          priceInput: defaultPriceInput,
         },
       ];
     });
@@ -128,15 +180,61 @@ export default function POS() {
     );
   };
 
-  // Update Bargain Price per item
-  const updateBargainPrice = (productId, newPrice) => {
-    const price = newPrice === '' ? '' : Math.max(0, Number(newPrice));
+  // Update Price Input per item
+  const updatePriceInput = (productId, newPrice) => {
     setCart((prev) =>
       prev.map((item) => {
         if (item.product.id === productId) {
-          return { ...item, bargainPrice: price };
+          return { ...item, priceInput: newPrice };
         }
         return item;
+      })
+    );
+  };
+
+  // Update Currency for a single item (with auto conversion)
+  const updateItemCurrency = (productId, newCurr) => {
+    const rate = exchangeRate || 12000;
+    setCart((prev) =>
+      prev.map((item) => {
+        if (item.product.id === productId) {
+          if (item.currency === newCurr) return item;
+          const currentVal = Number(item.priceInput) || 0;
+          let convertedVal = '';
+          if (newCurr === 'USD' && item.currency === 'UZS') {
+            convertedVal = currentVal > 0 ? (Math.round((currentVal / rate) * 100) / 100) : '';
+          } else if (newCurr === 'UZS' && item.currency === 'USD') {
+            convertedVal = currentVal > 0 ? Math.round(currentVal * rate) : '';
+          }
+          return {
+            ...item,
+            currency: newCurr,
+            priceInput: convertedVal,
+          };
+        }
+        return item;
+      })
+    );
+  };
+
+  // Update Currency for all items in Cart
+  const updateAllCartCurrency = (newCurr) => {
+    const rate = exchangeRate || 12000;
+    setCart((prev) =>
+      prev.map((item) => {
+        if (item.currency === newCurr) return item;
+        const currentVal = Number(item.priceInput) || 0;
+        let convertedVal = '';
+        if (newCurr === 'USD' && item.currency === 'UZS') {
+          convertedVal = currentVal > 0 ? (Math.round((currentVal / rate) * 100) / 100) : '';
+        } else if (newCurr === 'UZS' && item.currency === 'USD') {
+          convertedVal = currentVal > 0 ? Math.round(currentVal * rate) : '';
+        }
+        return {
+          ...item,
+          currency: newCurr,
+          priceInput: convertedVal,
+        };
       })
     );
   };
@@ -207,17 +305,22 @@ export default function POS() {
       }
     }
 
-    const saleItems = cart.map((it) => ({
-      productId: it.product.id,
-      productName: it.product.name,
-      artikul: it.product.artikul,
-      quantity: it.quantity,
-      costPrice: it.product.costPrice,
-      sellPrice: it.product.sellPrice,
-      bargainPrice: Number(it.bargainPrice !== undefined && it.bargainPrice !== '' ? it.bargainPrice : it.product.sellPrice),
-      supplierId: it.product.supplierId || null,
-      supplierName: it.product.supplierName || '',
-    }));
+    const saleItems = cart.map((it) => {
+      const { priceUZS, priceUSD, prodCostUZS } = getItemEffectivePrices(it);
+      return {
+        productId: it.product.id,
+        productName: it.product.name,
+        artikul: it.product.artikul || '',
+        quantity: it.quantity,
+        costPrice: prodCostUZS,
+        sellPrice: Number(it.product.sellPrice || 0),
+        bargainPrice: priceUZS,
+        sellCurrency: it.currency || 'UZS',
+        priceUSD,
+        supplierId: it.product.supplierId || null,
+        supplierName: it.product.supplierName || '',
+      };
+    });
 
     const result = processSale({
       items: saleItems,
@@ -348,10 +451,32 @@ export default function POS() {
                   </div>
 
                   <div className="mt-3 pt-2 border-t border-gray-100 flex items-center justify-between min-w-0 w-full">
-                    <span className="text-xs sm:text-sm font-extrabold text-blue-700 truncate">
-                      {formatMoney(p.sellPrice)}
-                    </span>
-                    <span className="text-[10px] font-medium text-gray-400 flex-shrink-0 ml-1">so'm</span>
+                    {(() => {
+                      const isUSDSell = p.sellCurrency === 'USD' || Boolean(p.sellPriceUSD) || (p.costCurrency === 'USD' && p.sellPrice > 0 && p.sellPrice <= 1000);
+                      const pUSD = p.sellPriceUSD || (isUSDSell ? p.sellPrice : Math.round((p.sellPrice / (exchangeRate || 12000)) * 100) / 100);
+                      const pUZS = isUSDSell && p.sellPrice <= 1000 ? Math.round(pUSD * (exchangeRate || 12000)) : p.sellPrice;
+
+                      if (isUSDSell) {
+                        return (
+                          <div className="flex items-baseline justify-between w-full min-w-0">
+                            <span className="text-xs sm:text-sm font-black text-blue-700 truncate">
+                              ${formatUSD(pUSD).replace('$', '')}
+                            </span>
+                            <span className="text-[10px] font-bold text-gray-500 ml-1 flex-shrink-0">
+                              ({formatMoney(pUZS)} so'm)
+                            </span>
+                          </div>
+                        );
+                      }
+                      return (
+                        <div className="flex items-center justify-between w-full min-w-0">
+                          <span className="text-xs sm:text-sm font-extrabold text-blue-700 truncate">
+                            {formatMoney(p.sellPrice)}
+                          </span>
+                          <span className="text-[10px] font-medium text-gray-400 flex-shrink-0 ml-1">so'm</span>
+                        </div>
+                      );
+                    })()}
                   </div>
                 </button>
               );
@@ -383,6 +508,39 @@ export default function POS() {
               )}
             </div>
 
+            {/* Global Cart Currency Toggle */}
+            {cart.length > 0 && (
+              <div className="flex items-center justify-between py-2 border-b border-gray-100">
+                <span className="text-[11px] font-bold text-gray-500">
+                  Valyuta:
+                </span>
+                <div className="flex items-center bg-gray-100 p-0.5 rounded-xl border border-gray-200 text-xs font-bold">
+                  <button
+                    type="button"
+                    onClick={() => updateAllCartCurrency('UZS')}
+                    className={`px-2.5 py-1 rounded-lg transition-all ${
+                      cart.every((it) => it.currency === 'UZS')
+                        ? 'bg-blue-600 text-white shadow-xs'
+                        : 'text-gray-600 hover:text-gray-900'
+                    }`}
+                  >
+                    UZS (so'm)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => updateAllCartCurrency('USD')}
+                    className={`px-2.5 py-1 rounded-lg transition-all ${
+                      cart.some((it) => it.currency === 'USD')
+                        ? 'bg-emerald-600 text-white shadow-xs'
+                        : 'text-gray-600 hover:text-gray-900'
+                    }`}
+                  >
+                    USD ($)
+                  </button>
+                </div>
+              </div>
+            )}
+
             {/* Cart Items List */}
             <div className="flex-1 overflow-y-auto py-3 space-y-3 scrollbar-thin">
               {cart.length === 0 ? (
@@ -392,10 +550,7 @@ export default function POS() {
                 </div>
               ) : (
                 cart.map((item) => {
-                  const effectivePrice = item.bargainPrice !== undefined && item.bargainPrice !== ''
-                    ? Number(item.bargainPrice)
-                    : item.product.sellPrice;
-                  const isBelowCost = item.product.costPrice && effectivePrice < item.product.costPrice;
+                  const { isUSD, priceUZS, priceUSD, prodCostUZS, isBelowCost } = getItemEffectivePrices(item);
 
                   return (
                     <div
@@ -421,10 +576,10 @@ export default function POS() {
                         </button>
                       </div>
 
-                      {/* Quantity Selector + Bargain Price Field */}
-                      <div className="grid grid-cols-2 gap-1.5 pt-1 min-w-0">
+                      {/* Quantity Selector + Currency Toggle + Price Input */}
+                      <div className="grid grid-cols-12 gap-1.5 pt-1 items-center min-w-0">
                         {/* Quantity */}
-                        <div className="flex items-center bg-white border border-gray-200 rounded-xl px-1 py-1 justify-between min-w-0">
+                        <div className="col-span-5 flex items-center bg-white border border-gray-200 rounded-xl px-1 py-1 justify-between min-w-0">
                           <button
                             onClick={() => updateQuantity(item.product.id, item.quantity - 1)}
                             className="w-5 h-5 rounded-lg bg-gray-100 flex items-center justify-center text-gray-600 hover:bg-gray-200 flex-shrink-0"
@@ -448,38 +603,88 @@ export default function POS() {
                           </button>
                         </div>
 
-                        {/* Bargaining Price (Kelishilgan narx) */}
-                        <div className="relative min-w-0">
-                          <input
-                            type="number"
-                            step="any"
-                            min="0"
-                            placeholder={t('bargain_price')}
-                            value={item.bargainPrice !== undefined ? item.bargainPrice : item.product.sellPrice}
-                            onChange={(e) => updateBargainPrice(item.product.id, e.target.value)}
-                            className={`w-full px-2 py-1 text-xs font-bold rounded-xl border text-right focus:outline-none focus:ring-1
-                              ${isBelowCost
-                                ? 'border-amber-400 bg-amber-50 text-amber-900 focus:ring-amber-400'
-                                : 'border-gray-200 bg-white text-gray-900 focus:ring-blue-400'
+                        {/* Currency Toggle + Price Input */}
+                        <div className="col-span-7 flex items-center gap-1 min-w-0">
+                          <div className="flex bg-gray-200/90 p-0.5 rounded-lg text-[10px] font-bold flex-shrink-0">
+                            <button
+                              type="button"
+                              onClick={() => updateItemCurrency(item.product.id, 'UZS')}
+                              className={`px-1.5 py-0.5 rounded transition-all ${
+                                !isUSD
+                                  ? 'bg-blue-600 text-white shadow-xs'
+                                  : 'text-gray-600 hover:text-gray-900'
                               }`}
-                          />
+                            >
+                              so'm
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => updateItemCurrency(item.product.id, 'USD')}
+                              className={`px-1.5 py-0.5 rounded transition-all ${
+                                isUSD
+                                  ? 'bg-emerald-600 text-white shadow-xs'
+                                  : 'text-gray-600 hover:text-gray-900'
+                              }`}
+                            >
+                              $
+                            </button>
+                          </div>
+
+                          <div className="relative flex-1 min-w-0">
+                            {isUSD && (
+                              <div className="absolute inset-y-0 left-0 pl-1.5 flex items-center pointer-events-none text-emerald-600 font-bold text-xs">
+                                $
+                              </div>
+                            )}
+                            <input
+                              type="number"
+                              step="any"
+                              min="0"
+                              placeholder={isUSD ? "15" : "180000"}
+                              value={item.priceInput !== undefined ? item.priceInput : (isUSD ? priceUSD : priceUZS)}
+                              onChange={(e) => updatePriceInput(item.product.id, e.target.value)}
+                              className={`w-full py-1 text-xs font-bold rounded-xl border text-right focus:outline-none focus:ring-1 min-w-0 ${
+                                isUSD ? 'pl-4 pr-1.5' : 'px-1.5'
+                              } ${
+                                isBelowCost
+                                  ? 'border-amber-400 bg-amber-50 text-amber-900 focus:ring-amber-400'
+                                  : 'border-gray-200 bg-white text-gray-900 focus:ring-blue-400'
+                              }`}
+                            />
+                          </div>
                         </div>
+                      </div>
+
+                      {/* Live conversion text */}
+                      <div className="text-[10px] text-right font-mono text-gray-500 truncate">
+                        {isUSD
+                          ? `≈ ${formatUZS(priceUZS)} (kurs: ${formatUZS(exchangeRate)})`
+                          : `≈ $${formatUSD(priceUSD).replace('$', '')} (kurs: ${formatUZS(exchangeRate)})`}
                       </div>
 
                       {/* Below Cost Warning */}
                       {isBelowCost && (
                         <div className="flex items-center gap-1 text-[10px] font-semibold text-amber-700 bg-amber-100/70 px-2 py-0.5 rounded-lg truncate">
                           <AlertTriangle className="w-3 h-3 text-amber-600 flex-shrink-0" />
-                          <span className="truncate">{t('below_cost_warning')}</span>
+                          <span className="truncate">{t('below_cost_warning')} ({formatUZS(prodCostUZS)})</span>
                         </div>
                       )}
 
                       {/* Line Total */}
                       <div className="flex items-center justify-between text-xs pt-1 border-t border-gray-200/50">
                         <span className="text-gray-400 text-[11px]">Jami:</span>
-                        <span className="font-extrabold text-gray-900 truncate ml-1">
-                          {formatUZS(effectivePrice * item.quantity)}
-                        </span>
+                        <div className="text-right">
+                          <span className="font-extrabold text-gray-900">
+                            {isUSD
+                              ? `$${formatUSD(priceUSD * item.quantity).replace('$', '')}`
+                              : formatUZS(priceUZS * item.quantity)}
+                          </span>
+                          {isUSD && (
+                            <span className="text-[10px] text-gray-500 font-mono block">
+                              ({formatUZS(priceUZS * item.quantity)})
+                            </span>
+                          )}
+                        </div>
                       </div>
                     </div>
                   );
@@ -490,21 +695,16 @@ export default function POS() {
             {/* Cart Footer */}
             {cart.length > 0 && (
               <div className="pt-3 border-t border-gray-100 space-y-2.5">
-                <div className="space-y-1">
-                  <div className="flex items-center justify-between text-sm">
-                    <span className="font-medium text-gray-500">{t('total')}:</span>
-                    <span className="text-lg xl:text-xl font-black text-blue-700 truncate ml-2">
-                      {formatUZS(cartTotals.total)}
+                <div className="flex items-center justify-between text-sm">
+                  <span className="font-medium text-gray-500">{t('total')}:</span>
+                  <div className="text-right ml-2">
+                    <span className="text-lg xl:text-xl font-black text-blue-700">
+                      ${formatUSD(cartTotals.totalUSD).replace('$', '')}
+                    </span>
+                    <span className="text-xs text-gray-500 font-bold block">
+                      ({formatUZS(cartTotals.total)})
                     </span>
                   </div>
-
-                  {/* Net Profit: ONLY ADMIN */}
-                  {isAdmin && (
-                    <div className="flex items-center justify-between text-xs text-purple-700 bg-purple-50 px-2.5 py-1.5 rounded-xl font-semibold">
-                      <span>{t('profit')}:</span>
-                      <span className="font-mono font-bold truncate ml-2">{formatUZS(cartTotals.totalProfit)}</span>
-                    </div>
-                  )}
                 </div>
 
                 <button
@@ -512,7 +712,9 @@ export default function POS() {
                   className="w-full btn-primary py-3 text-xs xl:text-sm font-bold flex items-center justify-center gap-1.5 rounded-2xl shadow-lg shadow-blue-500/25 active:scale-95"
                 >
                   <ShoppingCart className="w-4 h-4" />
-                  <span className="truncate">{t('sell_button')} ({formatMoney(cartTotals.total)} so'm)</span>
+                  <span className="truncate">
+                    {t('sell_button')} (${formatUSD(cartTotals.totalUSD).replace('$', '')} / {formatMoney(cartTotals.total)} so'm)
+                  </span>
                 </button>
               </div>
             )}
@@ -535,7 +737,9 @@ export default function POS() {
                 <span className="text-xs font-semibold">{t('cart')}</span>
               </div>
               <div className="flex items-center gap-2">
-                <span className="text-sm font-extrabold">{formatUZS(cartTotals.total)}</span>
+                <span className="text-sm font-extrabold">
+                  ${formatUSD(cartTotals.totalUSD).replace('$', '')} ({formatUZS(cartTotals.total)})
+                </span>
                 <ChevronRight className="w-4 h-4" />
               </div>
             </button>
@@ -573,13 +777,43 @@ export default function POS() {
               </div>
             </div>
 
+            {/* Mobile Global Cart Currency Toggle */}
+            {cart.length > 0 && (
+              <div className="flex items-center justify-between py-2 border-b border-gray-100">
+                <span className="text-[11px] font-bold text-gray-500">
+                  Valyuta:
+                </span>
+                <div className="flex items-center bg-gray-100 p-0.5 rounded-xl border border-gray-200 text-xs font-bold">
+                  <button
+                    type="button"
+                    onClick={() => updateAllCartCurrency('UZS')}
+                    className={`px-2.5 py-1 rounded-lg transition-all ${
+                      cart.every((it) => it.currency === 'UZS')
+                        ? 'bg-blue-600 text-white shadow-xs'
+                        : 'text-gray-600 hover:text-gray-900'
+                    }`}
+                  >
+                    UZS (so'm)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => updateAllCartCurrency('USD')}
+                    className={`px-2.5 py-1 rounded-lg transition-all ${
+                      cart.some((it) => it.currency === 'USD')
+                        ? 'bg-emerald-600 text-white shadow-xs'
+                        : 'text-gray-600 hover:text-gray-900'
+                    }`}
+                  >
+                    USD ($)
+                  </button>
+                </div>
+              </div>
+            )}
+
             {/* Mobile Cart Items */}
             <div className="flex-1 overflow-y-auto py-3 space-y-3">
               {cart.map((item) => {
-                const effectivePrice = item.bargainPrice !== undefined && item.bargainPrice !== ''
-                  ? Number(item.bargainPrice)
-                  : item.product.sellPrice;
-                const isBelowCost = item.product.costPrice && effectivePrice < item.product.costPrice;
+                const { isUSD, priceUZS, priceUSD, prodCostUZS, isBelowCost } = getItemEffectivePrices(item);
 
                 return (
                   <div
@@ -598,43 +832,90 @@ export default function POS() {
                       </button>
                     </div>
 
-                    <div className="grid grid-cols-2 gap-2">
-                      <div className="flex items-center bg-white border border-gray-200 rounded-xl px-2 py-1 justify-between">
+                    <div className="grid grid-cols-12 gap-1.5 items-center">
+                      <div className="col-span-5 flex items-center bg-white border border-gray-200 rounded-xl px-1.5 py-1 justify-between">
                         <button
                           onClick={() => updateQuantity(item.product.id, item.quantity - 1)}
-                          className="w-7 h-7 rounded-lg bg-gray-100 flex items-center justify-center"
+                          className="w-6 h-6 rounded-lg bg-gray-100 flex items-center justify-center"
                         >
                           <Minus className="w-3 h-3" />
                         </button>
                         <span className="font-bold text-xs">{item.quantity}</span>
                         <button
                           onClick={() => updateQuantity(item.product.id, item.quantity + 1)}
-                          className="w-7 h-7 rounded-lg bg-gray-100 flex items-center justify-center"
+                          className="w-6 h-6 rounded-lg bg-gray-100 flex items-center justify-center"
                         >
                           <Plus className="w-3 h-3" />
                         </button>
                       </div>
 
-                      <div>
-                        <input
-                          type="number"
-                          step="any"
-                          value={item.bargainPrice !== undefined ? item.bargainPrice : item.product.sellPrice}
-                          onChange={(e) => updateBargainPrice(item.product.id, e.target.value)}
-                          className="w-full px-2 py-1 text-xs font-bold rounded-xl border bg-white text-right"
-                        />
+                      <div className="col-span-7 flex items-center gap-1">
+                        <div className="flex bg-gray-200/90 p-0.5 rounded-lg text-[10px] font-bold flex-shrink-0">
+                          <button
+                            type="button"
+                            onClick={() => updateItemCurrency(item.product.id, 'UZS')}
+                            className={`px-1.5 py-0.5 rounded transition-all ${
+                              !isUSD
+                                ? 'bg-blue-600 text-white shadow-xs'
+                                : 'text-gray-600 hover:text-gray-900'
+                            }`}
+                          >
+                            so'm
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => updateItemCurrency(item.product.id, 'USD')}
+                            className={`px-1.5 py-0.5 rounded transition-all ${
+                              isUSD
+                                ? 'bg-emerald-600 text-white shadow-xs'
+                                : 'text-gray-600 hover:text-gray-900'
+                            }`}
+                          >
+                            $
+                          </button>
+                        </div>
+
+                        <div className="relative flex-1 min-w-0">
+                          {isUSD && (
+                            <div className="absolute inset-y-0 left-0 pl-1.5 flex items-center pointer-events-none text-emerald-600 font-bold text-xs">
+                              $
+                            </div>
+                          )}
+                          <input
+                            type="number"
+                            step="any"
+                            value={item.priceInput !== undefined ? item.priceInput : (isUSD ? priceUSD : priceUZS)}
+                            onChange={(e) => updatePriceInput(item.product.id, e.target.value)}
+                            className={`w-full py-1 text-xs font-bold rounded-xl border bg-white text-right ${
+                              isUSD ? 'pl-4 pr-1.5' : 'px-1.5'
+                            } ${
+                              isBelowCost ? 'border-amber-400 bg-amber-50 text-amber-900' : 'border-gray-200'
+                            }`}
+                          />
+                        </div>
                       </div>
                     </div>
 
                     {isBelowCost && (
                       <p className="text-[10px] text-amber-700 bg-amber-100 px-2 py-0.5 rounded">
-                        {t('below_cost_warning')}
+                        {t('below_cost_warning')} ({formatUZS(prodCostUZS)})
                       </p>
                     )}
 
                     <div className="flex items-center justify-between text-xs font-bold pt-1 border-t border-gray-200">
                       <span className="text-gray-400">Jami:</span>
-                      <span>{formatUZS(effectivePrice * item.quantity)}</span>
+                      <div className="text-right">
+                        <span>
+                          {isUSD
+                            ? `$${formatUSD(priceUSD * item.quantity).replace('$', '')}`
+                            : formatUZS(priceUZS * item.quantity)}
+                        </span>
+                        {isUSD && (
+                          <span className="text-[10px] text-gray-500 font-mono block">
+                            ({formatUZS(priceUZS * item.quantity)})
+                          </span>
+                        )}
+                      </div>
                     </div>
                   </div>
                 );
@@ -645,7 +926,14 @@ export default function POS() {
             <div className="pt-3 border-t border-gray-100 space-y-2">
               <div className="flex items-center justify-between text-base font-black">
                 <span>{t('total')}:</span>
-                <span className="text-blue-700">{formatUZS(cartTotals.total)}</span>
+                <div className="text-right">
+                  <span className="text-blue-700">
+                    ${formatUSD(cartTotals.totalUSD).replace('$', '')}
+                  </span>
+                  <span className="text-xs text-gray-500 font-bold block">
+                    ({formatUZS(cartTotals.total)})
+                  </span>
+                </div>
               </div>
               <button
                 onClick={handleOpenCheckout}
@@ -666,7 +954,7 @@ export default function POS() {
               <div>
                 <h3 className="text-base font-bold text-gray-900">{t('checkout')}</h3>
                 <p className="text-xs text-gray-500">
-                  {t('total')}: <span className="font-extrabold text-blue-700">{formatUZS(cartTotals.total)}</span>
+                  {t('total')}: <span className="font-extrabold text-blue-700">${formatUSD(cartTotals.totalUSD).replace('$', '')} ({formatUZS(cartTotals.total)})</span>
                 </p>
               </div>
               <button

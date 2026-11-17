@@ -125,12 +125,24 @@ export function AppProvider({ children }) {
       await saveCloudExchangeRate(rate);
     }
 
-    // Recalculate converted UZS costPrice for all products with USD cost
+    // Recalculate converted UZS costPrice and sellPrice for all products with USD
     const updatedProducts = products.map((p) => {
+      let changed = false;
+      let newCost = p.costPrice;
+      let newSell = p.sellPrice;
       if (p.costCurrency === 'USD' && p.costPriceUSD) {
+        newCost = Math.round(Number(p.costPriceUSD) * rate);
+        changed = true;
+      }
+      if (p.sellCurrency === 'USD' && p.sellPriceUSD) {
+        newSell = Math.round(Number(p.sellPriceUSD) * rate);
+        changed = true;
+      }
+      if (changed) {
         return {
           ...p,
-          costPrice: Math.round(Number(p.costPriceUSD) * rate),
+          costPrice: newCost,
+          sellPrice: newSell,
           updatedAt: new Date().toISOString(),
         };
       }
@@ -245,7 +257,18 @@ export function AppProvider({ children }) {
       costPriceUSD = Math.round((costPrice / exchangeRate) * 100) / 100;
     }
 
-    const sell = Number(productData.sellPrice) || 0;
+    const sellCurrency = productData.sellCurrency === 'USD' ? 'USD' : 'UZS';
+    let sellPrice = 0;
+    let sellPriceUSD = 0;
+
+    if (sellCurrency === 'USD') {
+      sellPriceUSD = Number(productData.sellPriceUSD !== undefined ? productData.sellPriceUSD : productData.sellPrice) || 0;
+      sellPrice = Math.round(sellPriceUSD * exchangeRate);
+    } else {
+      sellPrice = Number(productData.sellPrice) || 0;
+      sellPriceUSD = Math.round((sellPrice / exchangeRate) * 100) / 100;
+    }
+
     const qty = Number(productData.quantity) || 0;
     const supplierId = productData.supplierId || null;
     const supplierName = productData.supplierName || '';
@@ -258,7 +281,9 @@ export function AppProvider({ children }) {
       costPrice,
       costPriceUSD,
       costCurrency,
-      sellPrice: sell,
+      sellPrice,
+      sellPriceUSD,
+      sellCurrency,
       quantity: qty,
       supplierId,
       supplierName,
@@ -317,6 +342,20 @@ export function AppProvider({ children }) {
           }
         }
 
+        const sellCurrency = updates.sellCurrency || p.sellCurrency || (p.sellPriceUSD && !p.sellPrice ? 'USD' : 'UZS');
+        let sellPrice = p.sellPrice;
+        let sellPriceUSD = p.sellPriceUSD;
+
+        if (updates.sellPrice !== undefined || updates.sellPriceUSD !== undefined) {
+          if (sellCurrency === 'USD') {
+            sellPriceUSD = Number(updates.sellPriceUSD !== undefined ? updates.sellPriceUSD : updates.sellPrice) || 0;
+            sellPrice = Math.round(sellPriceUSD * exchangeRate);
+          } else {
+            sellPrice = Number(updates.sellPrice !== undefined ? updates.sellPrice : p.sellPrice) || 0;
+            sellPriceUSD = Math.round((sellPrice / exchangeRate) * 100) / 100;
+          }
+        }
+
         return {
           ...p,
           ...updates,
@@ -325,7 +364,9 @@ export function AppProvider({ children }) {
           costPrice,
           costPriceUSD,
           costCurrency,
-          sellPrice: updates.sellPrice !== undefined ? Number(updates.sellPrice) : p.sellPrice,
+          sellPrice,
+          sellPriceUSD,
+          sellCurrency,
           quantity: updates.quantity !== undefined ? Number(updates.quantity) : p.quantity,
           supplierId: updates.supplierId !== undefined ? updates.supplierId : p.supplierId,
           supplierName: updates.supplierName !== undefined ? updates.supplierName : p.supplierName,
@@ -352,6 +393,7 @@ export function AppProvider({ children }) {
     let targetSupplierName = supplierInfo.supplierName || '';
     const purchaseMode = supplierInfo.purchasePaymentMode || 'cash';
     const costCurrency = supplierInfo.costCurrency || 'UZS';
+    const sellCurrency = supplierInfo.sellCurrency || 'UZS';
 
     const updated = products.map((p) => {
       if (p.id === id) {
@@ -361,6 +403,18 @@ export function AppProvider({ children }) {
         } else {
           effectiveCostUZS = newCostPrice !== undefined && newCostPrice !== '' ? Number(newCostPrice) : (p.costPrice || 0);
           effectiveCostUSD = Math.round((effectiveCostUZS / exchangeRate) * 100) / 100;
+        }
+
+        let effectiveSellUZS = p.sellPrice;
+        let effectiveSellUSD = p.sellPriceUSD;
+        if (newSellPrice !== undefined && newSellPrice !== '') {
+          if (sellCurrency === 'USD') {
+            effectiveSellUSD = Number(supplierInfo.sellPriceUSD !== undefined ? supplierInfo.sellPriceUSD : newSellPrice) || 0;
+            effectiveSellUZS = Math.round(effectiveSellUSD * exchangeRate);
+          } else {
+            effectiveSellUZS = Number(newSellPrice) || 0;
+            effectiveSellUSD = Math.round((effectiveSellUZS / exchangeRate) * 100) / 100;
+          }
         }
 
         if (!targetSupplierId && p.supplierId) {
@@ -374,7 +428,9 @@ export function AppProvider({ children }) {
           costPrice: effectiveCostUZS,
           costPriceUSD: effectiveCostUSD,
           costCurrency: costCurrency || p.costCurrency || 'UZS',
-          sellPrice: newSellPrice !== undefined && newSellPrice !== '' ? Number(newSellPrice) : p.sellPrice,
+          sellPrice: effectiveSellUZS,
+          sellPriceUSD: effectiveSellUSD,
+          sellCurrency: sellCurrency || p.sellCurrency || 'UZS',
           supplierId: targetSupplierId || p.supplierId || null,
           supplierName: targetSupplierName || p.supplierName || '',
           updatedAt: now,
@@ -722,16 +778,93 @@ export function AppProvider({ children }) {
       }
     }
 
-    const profitDeduction = refundTotal - costTotalToRestore;
-    const isFullReturn = returnItems.every((ri) => {
-      const orig = sale.items.find((si) => si.productId === ri.productId);
-      return orig && Number(ri.quantity) >= orig.quantity;
+    // Update returnedQuantity on each item
+    const updatedItems = (sale.items || []).map((it) => {
+      const additionalRet = returnMap.get(it.productId) || 0;
+      const newRetQty = Number((Number(it.returnedQuantity || 0) + additionalRet).toFixed(2));
+      return {
+        ...it,
+        returnedQuantity: newRetQty,
+      };
     });
+
+    // Recalculate remaining active items, quantities, totals and costs
+    let activeTotalAmount = 0;
+    let activeTotalCost = 0;
+    let anyActiveItems = false;
+
+    updatedItems.forEach((it) => {
+      const activeQty = Math.max(0, Number(it.quantity || 0) - Number(it.returnedQuantity || 0));
+      if (activeQty > 0) anyActiveItems = true;
+      const price = Number(it.bargainPrice !== undefined ? it.bargainPrice : it.sellPrice);
+      const cost = Number(it.costPrice || 0);
+      activeTotalAmount += price * activeQty;
+      activeTotalCost += cost * activeQty;
+    });
+
+    const isFullReturn = !anyActiveItems || activeTotalAmount <= 0;
+
+    let newPaidCash = Number(sale.paidCash || 0);
+    let newPaidCard = Number(sale.paidCard || 0);
+    let newCreditAmount = Number(sale.creditAmount || 0);
+
+    if (isFullReturn) {
+      newPaidCash = 0;
+      newPaidCard = 0;
+      newCreditAmount = 0;
+      activeTotalAmount = 0;
+      activeTotalCost = 0;
+    } else {
+      if (refundMethod === 'cash') {
+        const deduct = Math.min(newPaidCash, refundTotal);
+        newPaidCash -= deduct;
+        const remainder = refundTotal - deduct;
+        if (remainder > 0) {
+          const deductCard = Math.min(newPaidCard, remainder);
+          newPaidCard -= deductCard;
+          const remainderCredit = remainder - deductCard;
+          if (remainderCredit > 0) {
+            newCreditAmount = Math.max(0, newCreditAmount - remainderCredit);
+          }
+        }
+      } else if (refundMethod === 'card') {
+        const deduct = Math.min(newPaidCard, refundTotal);
+        newPaidCard -= deduct;
+        const remainder = refundTotal - deduct;
+        if (remainder > 0) {
+          const deductCash = Math.min(newPaidCash, remainder);
+          newPaidCash -= deductCash;
+          const remainderCredit = remainder - deductCash;
+          if (remainderCredit > 0) {
+            newCreditAmount = Math.max(0, newCreditAmount - remainderCredit);
+          }
+        }
+      } else if (refundMethod === 'debt_reduce') {
+        newCreditAmount = Math.max(0, newCreditAmount - refundTotal);
+      }
+
+      // Ensure total doesn't exceed activeTotalAmount
+      if (newPaidCash + newPaidCard + newCreditAmount > activeTotalAmount) {
+        if (newCreditAmount > 0) {
+          newCreditAmount = Math.max(0, activeTotalAmount - newPaidCash - newPaidCard);
+        }
+        if (newPaidCash + newPaidCard > activeTotalAmount) {
+          newPaidCard = Math.max(0, activeTotalAmount - newPaidCash);
+          newPaidCash = Math.min(newPaidCash, activeTotalAmount);
+        }
+      }
+    }
+
+    const activeTotalProfit = Math.max(0, activeTotalAmount - activeTotalCost);
+    const activeCollected = newPaidCash + newPaidCard;
+    const activeCollectedRatio = activeTotalAmount > 0 ? (activeCollected / activeTotalAmount) : 0;
+    const newRealizedProfit = isFullReturn ? 0 : Math.round(activeTotalProfit * activeCollectedRatio);
 
     const updatedSales = sales.map((s) => {
       if (s.id === saleId) {
         return {
           ...s,
+          items: updatedItems,
           returned: isFullReturn || s.returned,
           returnedItems: [
             ...(s.returnedItems || []),
@@ -742,8 +875,14 @@ export function AppProvider({ children }) {
               date: now,
             })),
           ],
-          totalAmount: Math.max(0, s.totalAmount - refundTotal),
-          realizedProfit: Math.max(0, s.realizedProfit - (refundMethod !== 'debt_reduce' ? profitDeduction : 0)),
+          totalAmount: activeTotalAmount,
+          totalCost: activeTotalCost,
+          totalProfit: activeTotalProfit,
+          paidCash: newPaidCash,
+          paidCard: newPaidCard,
+          creditAmount: newCreditAmount,
+          realizedProfit: newRealizedProfit,
+          initialRealizedProfit: newRealizedProfit,
         };
       }
       return s;
@@ -764,11 +903,30 @@ export function AppProvider({ children }) {
     let realizedProfit = 0;
 
     filteredSales.forEach((s) => {
+      // Map returned items to handle both new and legacy returns
+      const returnedMap = new Map();
+      (s.returnedItems || []).forEach((ri) => {
+        returnedMap.set(ri.productId, (returnedMap.get(ri.productId) || 0) + Number(ri.quantity || 0));
+      });
+
+      let saleActiveAmount = 0;
+      let hasActive = false;
+      (s.items || []).forEach((it) => {
+        const retQty = Number(it.returnedQuantity !== undefined ? it.returnedQuantity : (returnedMap.get(it.productId) || 0));
+        const activeQty = Math.max(0, Number(it.quantity || 0) - retQty);
+        if (activeQty > 0) hasActive = true;
+        const price = Number(it.bargainPrice !== undefined ? it.bargainPrice : it.sellPrice);
+        saleActiveAmount += price * activeQty;
+      });
+
+      // If fully returned or no active amount, do NOT add any cash, card, or profit!
+      if ((s.returned && !hasActive) || saleActiveAmount <= 0) {
+        return;
+      }
+
       totalCashCollected += Number(s.paidCash || 0);
       totalCardCollected += Number(s.paidCard || 0);
-      // For sales created in range, count initial realized profit
-      const initProfit = s.initialRealizedProfit !== undefined ? s.initialRealizedProfit : s.realizedProfit;
-      realizedProfit += Number(initProfit || 0);
+      realizedProfit += Number(s.realizedProfit || 0);
     });
 
     // Also include debtor debt payments made during this date range (both cash/card & realized profit)
@@ -830,11 +988,34 @@ export function AppProvider({ children }) {
 
       let supplierProfit = 0;
       sales.forEach((s) => {
-        const saleRealizedRatio = s.totalProfit > 0 ? (s.realizedProfit / s.totalProfit) : 1;
+        const returnedMap = new Map();
+        (s.returnedItems || []).forEach((ri) => {
+          returnedMap.set(ri.productId, (returnedMap.get(ri.productId) || 0) + Number(ri.quantity || 0));
+        });
+
+        let saleActiveAmount = 0;
+        let anyActive = false;
+        (s.items || []).forEach((it) => {
+          const retQty = Number(it.returnedQuantity !== undefined ? it.returnedQuantity : (returnedMap.get(it.productId) || 0));
+          const activeQty = Math.max(0, Number(it.quantity || 0) - retQty);
+          if (activeQty > 0) anyActive = true;
+          const price = Number(it.bargainPrice !== undefined ? it.bargainPrice : it.sellPrice);
+          saleActiveAmount += price * activeQty;
+        });
+
+        if ((s.returned && !anyActive) || saleActiveAmount <= 0) return;
+
+        const collectedSum = Number(s.paidCash || 0) + Number(s.paidCard || 0);
+        const saleRealizedRatio = s.totalAmount > 0 ? (collectedSum / s.totalAmount) : (s.paymentMode === 'credit' ? 0 : 1);
+
         (s.items || []).forEach((it) => {
           if (it.supplierId === sup.id) {
+            const retQty = Number(it.returnedQuantity !== undefined ? it.returnedQuantity : (returnedMap.get(it.productId) || 0));
+            const activeQty = Math.max(0, Number(it.quantity || 0) - retQty);
+            if (activeQty <= 0) return;
+
             const actualPrice = it.bargainPrice !== undefined ? it.bargainPrice : it.sellPrice;
-            const itemMargin = (actualPrice - (it.costPrice || 0)) * (it.quantity || 1);
+            const itemMargin = (actualPrice - (it.costPrice || 0)) * activeQty;
             supplierProfit += Math.round(itemMargin * saleRealizedRatio);
           }
         });
