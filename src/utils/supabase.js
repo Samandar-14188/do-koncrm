@@ -1,16 +1,22 @@
 import { createClient } from '@supabase/supabase-js';
 import { storage } from './storage';
 
+// Direct production credentials fallback: Guarantees connection on Vercel even if .env is missing
+export const DEFAULT_SUPABASE_URL = 'https://onfetmohvsootnglvtro.supabase.co';
+export const DEFAULT_SUPABASE_ANON_KEY = 'sb_publishable_8etDnrIl9owmyMKMXjkWvQ_zNjOhXIE';
+
 let supabaseClient = null;
 let realtimeChannel = null;
 
 export function initSupabase(url, anonKey) {
-  if (!url || !anonKey) return null;
+  const targetUrl = url || DEFAULT_SUPABASE_URL;
+  const targetKey = anonKey || DEFAULT_SUPABASE_ANON_KEY;
+
   try {
     if (supabaseClient) {
       return supabaseClient;
     }
-    supabaseClient = createClient(url, anonKey, {
+    supabaseClient = createClient(targetUrl, targetKey, {
       auth: {
         persistSession: true,
         autoRefreshToken: true,
@@ -38,24 +44,27 @@ export function isSupabaseConnected() {
   return !!supabaseClient;
 }
 
-// Get current Supabase credentials: localStorage first, then fallback to .env VITE_ variables
+// Get current Supabase credentials: environment variables first, then localStorage, then hardcoded production fallback
 export function getSupabaseConfig() {
   const config = storage.get('supabase_config');
+  const envUrl = import.meta.env?.VITE_SUPABASE_URL;
+  const envKey = import.meta.env?.VITE_SUPABASE_ANON_KEY;
+
   return {
-    url: config?.url || import.meta.env?.VITE_SUPABASE_URL || '',
-    key: config?.key || import.meta.env?.VITE_SUPABASE_ANON_KEY || '',
+    url: (envUrl && envUrl.trim()) || config?.url || DEFAULT_SUPABASE_URL,
+    key: (envKey && envKey.trim()) || config?.key || DEFAULT_SUPABASE_ANON_KEY,
   };
 }
 
-// Load Supabase config from localStorage or default to .env
+// Load Supabase config and initialize client immediately
 export function autoInitSupabase() {
   if (supabaseClient) return supabaseClient;
   const { url, key } = getSupabaseConfig();
-  if (url && key) {
-    return initSupabase(url, key);
-  }
-  return null;
+  return initSupabase(url, key);
 }
+
+// Auto-run on module load to guarantee instant connection
+autoInitSupabase();
 
 // -------------------------------------------------------------
 // Fetch a table directly from Supabase (Returns success flag)
@@ -108,17 +117,31 @@ export async function syncFromCloud(tableName) {
 // -------------------------------------------------------------
 export async function saveRecordToCloud(tableName, record) {
   if (!supabaseClient) autoInitSupabase();
-  if (!supabaseClient || !record || !record.id) return { error: 'Not connected' };
+  if (!supabaseClient || !record || record.id === undefined) return { error: 'Not connected' };
 
   try {
     const row = {
-      id: record.id,
+      id: String(record.id),
       data: record,
       updated_at: new Date().toISOString(),
     };
     const { data, error } = await supabaseClient
       .from(tableName)
       .upsert([row], { onConflict: 'id' });
+
+    // For suppliers, backup to settings table too
+    if (tableName === 'suppliers') {
+      try {
+        const allSuppliers = storage.get('suppliers') || [record];
+        await supabaseClient.from('settings').upsert([
+          {
+            id: 'store_suppliers',
+            data: allSuppliers,
+            updated_at: new Date().toISOString(),
+          },
+        ], { onConflict: 'id' });
+      } catch (_) {}
+    }
 
     if (error) console.error(`saveRecordToCloud ${tableName} error:`, error);
     return { data, error };
@@ -133,13 +156,26 @@ export async function saveRecordToCloud(tableName, record) {
 // -------------------------------------------------------------
 export async function deleteRecordFromCloud(tableName, recordId) {
   if (!supabaseClient) autoInitSupabase();
-  if (!supabaseClient || !recordId) return { error: 'Not connected' };
+  if (!supabaseClient || recordId === undefined) return { error: 'Not connected' };
 
   try {
     const { data, error } = await supabaseClient
       .from(tableName)
       .delete()
-      .eq('id', recordId);
+      .eq('id', String(recordId));
+
+    if (tableName === 'suppliers') {
+      try {
+        const remainingSuppliers = (storage.get('suppliers') || []).filter((s) => String(s.id) !== String(recordId));
+        await supabaseClient.from('settings').upsert([
+          {
+            id: 'store_suppliers',
+            data: remainingSuppliers,
+            updated_at: new Date().toISOString(),
+          },
+        ], { onConflict: 'id' });
+      } catch (_) {}
+    }
 
     if (error) console.error(`deleteRecordFromCloud ${tableName} error:`, error);
     return { data, error };
@@ -162,7 +198,7 @@ export async function syncToCloud(tableName, records) {
     }
 
     const rows = records.map((r) => ({
-      id: r.id,
+      id: String(r.id),
       data: r,
       updated_at: new Date().toISOString(),
     }));

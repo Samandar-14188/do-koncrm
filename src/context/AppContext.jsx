@@ -21,7 +21,8 @@ const AppContext = createContext();
 export const cleanProduct = (p, currentRate = 12800) => {
   if (!p) return p;
   const costCurrency = p.costCurrency === 'USD' ? 'USD' : 'UZS';
-  const sellCurrency = p.sellCurrency === 'USD' ? 'USD' : 'UZS';
+  const sellCurrency = (p.sellCurrency === 'USD' || p.priceCurrency === 'USD') ? 'USD' : 'UZS';
+  const priceCurrency = sellCurrency;
 
   const costPrice = Number(p.costPrice) || 0;
   const sellPrice = Number(p.sellPrice) || 0;
@@ -46,6 +47,7 @@ export const cleanProduct = (p, currentRate = 12800) => {
     costPrice,
     costPriceUSD,
     sellCurrency,
+    priceCurrency,
     sellPrice,
     sellPriceUSD,
   };
@@ -86,6 +88,7 @@ export function AppProvider({ children }) {
   const [isCloudConnected, setIsCloudConnected] = useState(false);
 
   // Helper to fetch all tables directly from Supabase (Single Source of Truth)
+  // AND immediately push any existing unsynced localStorage items to Supabase!
   const syncAllFromCloud = useCallback(async (forcedRate) => {
     if (!isSupabaseConnected()) {
       autoInitSupabase();
@@ -107,27 +110,86 @@ export function AppProvider({ children }) {
         storage.set('exchange_rate', Number(cloudRate));
       }
 
-      // CRITICAL: Supabase is the Single Source of Truth!
-      // If Supabase returned success (even with 0 records []), it OVERWRITES localStorage!
+      // 1. PRODUCTS: Reconcile and push unsynced local products to Supabase
+      const localProducts = storage.get('products') || [];
       if (prodsRes.success) {
-        const cleaned = prodsRes.data.map((p) => cleanProduct(p, activeRate));
-        setProducts(cleaned);
-        storage.set('products', cleaned);
+        if (prodsRes.data.length === 0 && localProducts.length > 0) {
+          console.log(`Pushing ${localProducts.length} unsynced local products to Supabase`);
+          await syncToCloud('products', localProducts);
+          const cleaned = localProducts.map((p) => cleanProduct(p, activeRate));
+          setProducts(cleaned);
+          storage.set('products', cleaned);
+        } else {
+          const cloudIds = new Set(prodsRes.data.map((p) => String(p.id)));
+          const unsynced = localProducts.filter((p) => !cloudIds.has(String(p.id)));
+          if (unsynced.length > 0) {
+            console.log(`Pushing ${unsynced.length} missing local products to Supabase`);
+            await syncToCloud('products', unsynced);
+          }
+          const merged = [...prodsRes.data, ...unsynced].map((p) => cleanProduct(p, activeRate));
+          setProducts(merged);
+          storage.set('products', merged);
+        }
       }
 
+      // 2. DEBTORS: Reconcile and push unsynced local debtors to Supabase
+      const localDebtors = storage.get('debtors') || [];
       if (debtorsRes.success) {
-        setDebtors(debtorsRes.data);
-        storage.set('debtors', debtorsRes.data);
+        if (debtorsRes.data.length === 0 && localDebtors.length > 0) {
+          console.log(`Pushing ${localDebtors.length} unsynced local debtors to Supabase`);
+          await syncToCloud('debtors', localDebtors);
+          setDebtors(localDebtors);
+          storage.set('debtors', localDebtors);
+        } else {
+          const cloudIds = new Set(debtorsRes.data.map((d) => String(d.id)));
+          const unsynced = localDebtors.filter((d) => !cloudIds.has(String(d.id)));
+          if (unsynced.length > 0) {
+            await syncToCloud('debtors', unsynced);
+          }
+          const merged = [...debtorsRes.data, ...unsynced];
+          setDebtors(merged);
+          storage.set('debtors', merged);
+        }
       }
 
+      // 3. SALES: Reconcile and push unsynced local sales to Supabase
+      const localSales = storage.get('sales') || [];
       if (salesRes.success) {
-        setSales(salesRes.data);
-        storage.set('sales', salesRes.data);
+        if (salesRes.data.length === 0 && localSales.length > 0) {
+          console.log(`Pushing ${localSales.length} unsynced local sales to Supabase`);
+          await syncToCloud('sales', localSales);
+          setSales(localSales);
+          storage.set('sales', localSales);
+        } else {
+          const cloudIds = new Set(salesRes.data.map((s) => String(s.id)));
+          const unsynced = localSales.filter((s) => !cloudIds.has(String(s.id)));
+          if (unsynced.length > 0) {
+            await syncToCloud('sales', unsynced);
+          }
+          const merged = [...salesRes.data, ...unsynced];
+          setSales(merged);
+          storage.set('sales', merged);
+        }
       }
 
+      // 4. SUPPLIERS: Reconcile and push unsynced local suppliers to Supabase
+      const localSuppliers = storage.get('suppliers') || [];
       if (suppliersRes.success) {
-        setSuppliers(suppliersRes.data);
-        storage.set('suppliers', suppliersRes.data);
+        if (suppliersRes.data.length === 0 && localSuppliers.length > 0) {
+          console.log(`Pushing ${localSuppliers.length} unsynced local suppliers to Supabase`);
+          await syncToCloud('suppliers', localSuppliers);
+          setSuppliers(localSuppliers);
+          storage.set('suppliers', localSuppliers);
+        } else {
+          const cloudIds = new Set(suppliersRes.data.map((s) => String(s.id)));
+          const unsynced = localSuppliers.filter((s) => !cloudIds.has(String(s.id)));
+          if (unsynced.length > 0) {
+            await syncToCloud('suppliers', unsynced);
+          }
+          const merged = [...suppliersRes.data, ...unsynced];
+          setSuppliers(merged);
+          storage.set('suppliers', merged);
+        }
       }
 
       setIsCloudConnected(true);

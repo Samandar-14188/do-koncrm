@@ -131,7 +131,7 @@ export default function POS() {
     if (Number(product.quantity) <= 0) return; // Zero-stock rule
 
     const rate = exchangeRate || 12800;
-    const isUSDSell = product.sellCurrency === 'USD';
+    const isUSDSell = product.sellCurrency === 'USD' || product.priceCurrency === 'USD';
     const defaultCurr = isUSDSell ? 'USD' : 'UZS';
 
     let defaultPriceInput = '';
@@ -455,7 +455,7 @@ export default function POS() {
 
                   <div className="mt-3 pt-2 border-t border-gray-100 flex items-center justify-between min-w-0 w-full">
                     {(() => {
-                      const isUSDSell = p.sellCurrency === 'USD';
+                      const isUSDSell = p.sellCurrency === 'USD' || p.priceCurrency === 'USD';
                       const pUSD = p.sellPriceUSD !== undefined && p.sellPriceUSD !== null
                         ? p.sellPriceUSD
                         : Math.round((p.sellPrice / (exchangeRate || 12800)) * 100) / 100;
@@ -491,7 +491,7 @@ export default function POS() {
         </div>
 
         {/* Right Column: Desktop Cart (4 cols on desktop, comfortable width) */}
-        <div className="hidden lg:block lg:col-span-4 sticky top-2 z-20 min-w-0 h-[calc(100vh-8.5rem)]">
+        <div className="hidden lg:block lg:col-span-4 sticky top-0 z-20 min-w-0 h-[calc(100vh-10.5rem)] max-h-[calc(100vh-10.5rem)]">
           <div className="bg-white rounded-3xl shadow-sm border border-gray-200 p-3 sm:p-3.5 flex flex-col h-full overflow-hidden min-w-0">
             {/* Cart Header - FIXED AT TOP */}
             <div className="shrink-0 flex items-center justify-between pb-2 border-b border-gray-100">
