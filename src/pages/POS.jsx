@@ -486,9 +486,9 @@ export default function POS() {
         </div>
 
         {/* Right Column: Desktop Cart (4 cols on desktop, comfortable width) */}
-        <div className="hidden lg:block lg:col-span-4 sticky top-16 z-20 min-w-0">
-          <div className="bg-white rounded-3xl shadow-sm border border-gray-200 p-3 sm:p-3.5 flex flex-col max-h-[calc(100vh-100px)] overflow-hidden min-w-0">
-            {/* Cart Header */}
+        <div className="hidden lg:block lg:col-span-4 sticky top-2 z-20 min-w-0 h-[calc(100vh-8.5rem)]">
+          <div className="bg-white rounded-3xl shadow-sm border border-gray-200 p-3 sm:p-3.5 flex flex-col h-full overflow-hidden min-w-0">
+            {/* Cart Header - FIXED AT TOP */}
             <div className="shrink-0 flex items-center justify-between pb-2 border-b border-gray-100">
               <div className="flex items-center gap-2">
                 <ShoppingCart className="w-5 h-5 text-blue-600" />
@@ -508,7 +508,7 @@ export default function POS() {
               )}
             </div>
 
-            {/* Global Cart Currency Toggle */}
+            {/* Global Cart Currency Toggle - FIXED AT TOP */}
             {cart.length > 0 && (
               <div className="shrink-0 flex items-center justify-between py-1.5 border-b border-gray-100">
                 <span className="text-[11px] font-bold text-gray-500">
@@ -541,10 +541,10 @@ export default function POS() {
               </div>
             )}
 
-            {/* Cart Items List */}
+            {/* Cart Items List - SCROLLS INTERNALLY */}
             <div className="flex-1 overflow-y-auto pr-1 py-2 space-y-2 min-h-0 scrollbar-thin">
               {cart.length === 0 ? (
-                <div className="py-12 text-center">
+                <div className="h-full flex flex-col items-center justify-center py-12 text-center">
                   <ShoppingCart className="w-10 h-10 text-gray-300 mx-auto mb-2" />
                   <p className="text-xs text-gray-400 font-medium">{t('cart_empty')}</p>
                 </div>
@@ -692,9 +692,9 @@ export default function POS() {
               )}
             </div>
 
-            {/* Cart Footer - ALWAYS VISIBLE (sticky bottom-0 shrink-0) */}
+            {/* Cart Footer - ALWAYS VISIBLE FIXED AT BOTTOM */}
             {cart.length > 0 && (
-              <div className="shrink-0 sticky bottom-0 bg-white pt-2.5 border-t border-gray-100 space-y-2 z-10">
+              <div className="shrink-0 border-t border-gray-100 pt-2.5 space-y-2 bg-white z-10">
                 <div className="flex items-center justify-between text-xs sm:text-sm">
                   <span className="font-semibold text-gray-500">{t('total')}:</span>
                   <div className="text-right ml-2">
@@ -754,8 +754,8 @@ export default function POS() {
             className="fixed inset-0 bg-black/50"
             onClick={() => setIsMobileCartOpen(false)}
           />
-          <div className="relative bg-white rounded-t-3xl shadow-2xl p-4 max-h-[85vh] flex flex-col z-10">
-            <div className="flex items-center justify-between pb-3 border-b border-gray-100">
+          <div className="relative bg-white rounded-t-3xl shadow-2xl p-4 h-[85vh] max-h-[85vh] flex flex-col overflow-hidden z-10">
+            <div className="shrink-0 flex items-center justify-between pb-3 border-b border-gray-100">
               <div className="flex items-center gap-2">
                 <ShoppingCart className="w-5 h-5 text-blue-600" />
                 <h3 className="font-bold text-base text-gray-900">{t('cart')}</h3>
@@ -779,7 +779,7 @@ export default function POS() {
 
             {/* Mobile Global Cart Currency Toggle */}
             {cart.length > 0 && (
-              <div className="flex items-center justify-between py-2 border-b border-gray-100">
+              <div className="shrink-0 flex items-center justify-between py-2 border-b border-gray-100">
                 <span className="text-[11px] font-bold text-gray-500">
                   Valyuta:
                 </span>
@@ -811,7 +811,7 @@ export default function POS() {
             )}
 
             {/* Mobile Cart Items */}
-            <div className="flex-1 overflow-y-auto py-3 space-y-3">
+            <div className="flex-1 overflow-y-auto py-3 space-y-3 min-h-0 scrollbar-thin">
               {cart.map((item) => {
                 const { isUSD, priceUZS, priceUSD, prodCostUZS, isBelowCost } = getItemEffectivePrices(item);
 
@@ -923,7 +923,7 @@ export default function POS() {
             </div>
 
             {/* Mobile Drawer Bottom */}
-            <div className="pt-3 border-t border-gray-100 space-y-2">
+            <div className="shrink-0 pt-3 border-t border-gray-100 space-y-2 bg-white">
               <div className="flex items-center justify-between text-base font-black">
                 <span>{t('total')}:</span>
                 <div className="text-right">
