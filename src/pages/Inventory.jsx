@@ -140,24 +140,26 @@ export default function Inventory() {
   // Open Edit Modal - if not admin, do NOT leak costPrice into state
   const handleOpenEdit = (p) => {
     setEditingProduct(p);
-    const costCurr = p.costCurrency || (p.costPriceUSD && !p.costPrice ? 'USD' : 'UZS');
-    const isUSDInitialSell = p.sellCurrency === 'USD' || Boolean(p.sellPriceUSD) || (p.costCurrency === 'USD' && p.sellPrice > 0 && p.sellPrice <= 1000);
-    const sellCurr = isUSDInitialSell ? 'USD' : 'UZS';
+    const costCurr = p.costCurrency === 'USD' ? 'USD' : 'UZS';
+    const sellCurr = p.sellCurrency === 'USD' ? 'USD' : 'UZS';
+
+    const costDisplay = costCurr === 'USD'
+      ? (p.costPriceUSD !== undefined && p.costPriceUSD !== null ? p.costPriceUSD : (Math.round((p.costPrice / exchangeRate) * 100) / 100))
+      : (p.costPrice || '');
+
     const sellDisplay = sellCurr === 'USD'
-      ? (p.sellPriceUSD || (p.sellPrice <= 1000 ? p.sellPrice : Math.round((p.sellPrice / exchangeRate) * 100) / 100))
-      : p.sellPrice;
+      ? (p.sellPriceUSD !== undefined && p.sellPriceUSD !== null ? p.sellPriceUSD : (Math.round((p.sellPrice / exchangeRate) * 100) / 100))
+      : (p.sellPrice || '');
 
     setFormData({
       name: p.name,
       artikul: p.artikul || '',
       costCurrency: costCurr,
-      costPrice: isAdmin
-        ? (costCurr === 'USD' ? (p.costPriceUSD !== undefined ? p.costPriceUSD : '') : (p.costPrice || ''))
-        : '',
-      costPriceUSD: isAdmin ? (p.costPriceUSD || '') : '',
+      costPrice: isAdmin ? costDisplay : '',
+      costPriceUSD: isAdmin && costCurr === 'USD' ? costDisplay : '',
       sellCurrency: sellCurr,
-      sellPrice: sellDisplay || '',
-      sellPriceUSD: p.sellPriceUSD || '',
+      sellPrice: sellDisplay,
+      sellPriceUSD: sellCurr === 'USD' ? sellDisplay : '',
       quantity: p.quantity,
       supplierId: p.supplierId || '',
       supplierName: p.supplierName || '',
@@ -170,19 +172,20 @@ export default function Inventory() {
   const handleOpenRestock = (p) => {
     setRestockItem(p);
     setRestockQty('');
-    const pCostCurr = p.costCurrency || 'UZS';
-    const isUSDInitialSell = p.sellCurrency === 'USD' || Boolean(p.sellPriceUSD) || (p.costCurrency === 'USD' && p.sellPrice > 0 && p.sellPrice <= 1000);
-    const pSellCurr = isUSDInitialSell ? 'USD' : 'UZS';
+    const pCostCurr = p.costCurrency === 'USD' ? 'USD' : 'UZS';
+    const pSellCurr = p.sellCurrency === 'USD' ? 'USD' : 'UZS';
     setRestockCostCurrency(pCostCurr);
     setRestockSellCurrency(pSellCurr);
     setRestockCost(
       isAdmin
-        ? (pCostCurr === 'USD' ? (p.costPriceUSD !== undefined && p.costPriceUSD !== null ? p.costPriceUSD : (Math.round((p.costPrice / exchangeRate) * 100) / 100)) : (p.costPrice || ''))
+        ? (pCostCurr === 'USD'
+            ? (p.costPriceUSD !== undefined && p.costPriceUSD !== null ? p.costPriceUSD : (Math.round((p.costPrice / exchangeRate) * 100) / 100))
+            : (p.costPrice || ''))
         : ''
     );
     setRestockSell(
       pSellCurr === 'USD'
-        ? (p.sellPriceUSD || (p.sellPrice <= 1000 ? p.sellPrice : Math.round((p.sellPrice / exchangeRate) * 100) / 100))
+        ? (p.sellPriceUSD !== undefined && p.sellPriceUSD !== null ? p.sellPriceUSD : (Math.round((p.sellPrice / exchangeRate) * 100) / 100))
         : (p.sellPrice || '')
     );
     setRestockSupplierId(p.supplierId || suppliers[0]?.id || '');
@@ -237,22 +240,22 @@ export default function Inventory() {
     const isUSD = formData.costCurrency === 'USD';
     const costInputVal = Number(formData.costPrice) || 0;
     const computedUZS = isUSD ? Math.round(costInputVal * exchangeRate) : costInputVal;
-    const computedUSD = isUSD ? costInputVal : (Math.round((costInputVal / exchangeRate) * 100) / 100);
+    const computedUSD = isUSD ? costInputVal : null;
 
     const isUSDSell = formData.sellCurrency === 'USD';
     const sellInputVal = Number(formData.sellPrice) || 0;
     const computedSellUZS = isUSDSell ? Math.round(sellInputVal * exchangeRate) : sellInputVal;
-    const computedSellUSD = isUSDSell ? sellInputVal : (Math.round((sellInputVal / exchangeRate) * 100) / 100);
+    const computedSellUSD = isUSDSell ? sellInputVal : null;
 
     if (editingProduct) {
       updateProduct(editingProduct.id, {
         name: formData.name,
         artikul: formData.artikul,
-        costCurrency: formData.costCurrency,
+        costCurrency: isUSD ? 'USD' : 'UZS',
         // If seller is editing, keep original costPrice untouched
         costPrice: isAdmin ? computedUZS : editingProduct.costPrice,
-        costPriceUSD: isAdmin ? computedUSD : editingProduct.costPriceUSD,
-        sellCurrency: formData.sellCurrency,
+        costPriceUSD: isAdmin ? computedUSD : (isUSD ? computedUSD : null),
+        sellCurrency: isUSDSell ? 'USD' : 'UZS',
         sellPrice: computedSellUZS,
         sellPriceUSD: computedSellUSD,
         quantity: Number(formData.quantity) || 0,
@@ -264,10 +267,10 @@ export default function Inventory() {
       addProduct({
         name: formData.name,
         artikul: formData.artikul,
-        costCurrency: formData.costCurrency,
+        costCurrency: isUSD ? 'USD' : 'UZS',
         costPrice: isAdmin ? computedUZS : 0,
-        costPriceUSD: isAdmin ? computedUSD : 0,
-        sellCurrency: formData.sellCurrency,
+        costPriceUSD: isAdmin ? computedUSD : null,
+        sellCurrency: isUSDSell ? 'USD' : 'UZS',
         sellPrice: computedSellUZS,
         sellPriceUSD: computedSellUSD,
         quantity: Number(formData.quantity) || 0,
@@ -294,12 +297,12 @@ export default function Inventory() {
     const isUSD = restockCostCurrency === 'USD';
     const costInputVal = Number(restockCost) || 0;
     const computedUZS = isUSD ? Math.round(costInputVal * exchangeRate) : costInputVal;
-    const computedUSD = isUSD ? costInputVal : (Math.round((costInputVal / exchangeRate) * 100) / 100);
+    const computedUSD = isUSD ? costInputVal : null;
 
     const isUSDSell = restockSellCurrency === 'USD';
     const sellInputVal = Number(restockSell) || 0;
     const computedSellUZS = isUSDSell ? Math.round(sellInputVal * exchangeRate) : sellInputVal;
-    const computedSellUSD = isUSDSell ? sellInputVal : (Math.round((sellInputVal / exchangeRate) * 100) / 100);
+    const computedSellUSD = isUSDSell ? sellInputVal : null;
 
     restockProduct(
       restockItem.id,
@@ -310,9 +313,9 @@ export default function Inventory() {
         supplierId: restockSupplierId || null,
         supplierName: selectedSup ? selectedSup.name : '',
         purchasePaymentMode: restockPaymentMode || 'cash',
-        costCurrency: restockCostCurrency,
+        costCurrency: isUSD ? 'USD' : 'UZS',
         costPriceUSD: computedUSD,
-        sellCurrency: restockSellCurrency,
+        sellCurrency: isUSDSell ? 'USD' : 'UZS',
         sellPriceUSD: computedSellUSD,
       }
     );
@@ -531,19 +534,19 @@ export default function Inventory() {
                     <div className="flex items-center justify-between min-w-0">
                       <span className="text-gray-500 font-medium truncate">{t('sell_price')}:</span>
                       {(() => {
-                        const isUSDSell = p.sellCurrency === 'USD' || Boolean(p.sellPriceUSD) || (p.costCurrency === 'USD' && p.sellPrice > 0 && p.sellPrice <= 1000);
-                        const pUSD = p.sellPriceUSD || (isUSDSell ? p.sellPrice : Math.round((p.sellPrice / exchangeRate) * 100) / 100);
-                        const pUZS = isUSDSell && p.sellPrice <= 1000 ? Math.round(pUSD * exchangeRate) : p.sellPrice;
-
+                        const isUSDSell = p.sellCurrency === 'USD';
                         if (isUSDSell) {
+                          const pUSD = p.sellPriceUSD !== undefined && p.sellPriceUSD !== null
+                            ? p.sellPriceUSD
+                            : Math.round((p.sellPrice / exchangeRate) * 100) / 100;
                           return (
                             <span className="font-bold text-gray-900 text-sm truncate ml-1 font-mono">
-                              ${formatUSD(pUSD).replace('$', '')} <span className="text-[11px] text-gray-500 font-sans font-normal">({formatUZS(pUZS)})</span>
+                              ${formatUSD(pUSD).replace('$', '')} <span className="text-[11px] text-gray-500 font-sans font-normal">({formatUZS(p.sellPrice)})</span>
                             </span>
                           );
                         }
                         return (
-                          <span className="font-bold text-gray-900 text-sm truncate ml-1">{formatUZS(p.sellPrice)}</span>
+                          <span className="font-bold text-gray-900 text-sm truncate ml-1 font-mono">{formatUZS(p.sellPrice)}</span>
                         );
                       })()}
                     </div>
@@ -671,7 +674,7 @@ export default function Inventory() {
                       ...prev,
                       supplierId: e.target.value,
                       supplierName: sup ? sup.name : '',
-                      costCurrency: sup?.currency ? sup.currency : prev.costCurrency,
+                      costCurrency: !editingProduct && sup?.currency ? sup.currency : prev.costCurrency,
                     }));
                   }}
                   className="input-field text-xs"
@@ -730,23 +733,11 @@ export default function Inventory() {
                   <button
                     type="button"
                     onClick={() => {
-                      setFormData((prev) => {
-                        let newCost = prev.costPrice;
-                        let newSell = prev.sellPrice;
-                        if (prev.costCurrency === 'USD' && prev.costPrice) {
-                          newCost = Math.round(Number(prev.costPrice) * exchangeRate);
-                        }
-                        if (prev.sellCurrency === 'USD' && prev.sellPrice) {
-                          newSell = Math.round(Number(prev.sellPrice) * exchangeRate);
-                        }
-                        return {
-                          ...prev,
-                          costCurrency: 'UZS',
-                          sellCurrency: 'UZS',
-                          costPrice: newCost,
-                          sellPrice: newSell,
-                        };
-                      });
+                      setFormData((prev) => ({
+                        ...prev,
+                        costCurrency: 'UZS',
+                        sellCurrency: 'UZS',
+                      }));
                     }}
                     className={`px-3 py-1 rounded-lg transition-all ${
                       formData.costCurrency === 'UZS' && formData.sellCurrency === 'UZS'
@@ -759,23 +750,11 @@ export default function Inventory() {
                   <button
                     type="button"
                     onClick={() => {
-                      setFormData((prev) => {
-                        let newCost = prev.costPrice;
-                        let newSell = prev.sellPrice;
-                        if (prev.costCurrency === 'UZS' && prev.costPrice) {
-                          newCost = Math.round((Number(prev.costPrice) / exchangeRate) * 100) / 100;
-                        }
-                        if (prev.sellCurrency === 'UZS' && prev.sellPrice) {
-                          newSell = Math.round((Number(prev.sellPrice) / exchangeRate) * 100) / 100;
-                        }
-                        return {
-                          ...prev,
-                          costCurrency: 'USD',
-                          sellCurrency: 'USD',
-                          costPrice: newCost,
-                          sellPrice: newSell,
-                        };
-                      });
+                      setFormData((prev) => ({
+                        ...prev,
+                        costCurrency: 'USD',
+                        sellCurrency: 'USD',
+                      }));
                     }}
                     className={`px-3 py-1 rounded-lg transition-all ${
                       formData.costCurrency === 'USD' || formData.sellCurrency === 'USD'

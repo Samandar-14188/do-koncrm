@@ -55,14 +55,16 @@ export default function POS() {
   // Helper to extract effective prices in UZS and USD for a cart item
   const getItemEffectivePrices = (item) => {
     const isUSD = item.currency === 'USD';
-    const rate = exchangeRate || 12000;
+    const rate = exchangeRate || 12800;
     let inputVal = item.priceInput;
 
     if (inputVal === undefined || inputVal === '') {
       if (isUSD) {
-        inputVal = item.product.sellPriceUSD || (item.product.sellPrice <= 1000 ? item.product.sellPrice : Math.round((item.product.sellPrice / rate) * 100) / 100);
+        inputVal = item.product.sellPriceUSD !== undefined && item.product.sellPriceUSD !== null
+          ? item.product.sellPriceUSD
+          : (Math.round((item.product.sellPrice / rate) * 100) / 100);
       } else {
-        inputVal = item.product.sellPrice > 1000 ? item.product.sellPrice : Math.round((item.product.sellPriceUSD || item.product.sellPrice) * rate);
+        inputVal = item.product.sellPrice || 0;
       }
     }
 
@@ -70,10 +72,7 @@ export default function POS() {
     const priceUZS = isUSD ? Math.round(numVal * rate) : numVal;
     const priceUSD = isUSD ? numVal : (Math.round((numVal / rate) * 100) / 100);
 
-    const prodCostUZS = (item.product.costCurrency === 'USD' && item.product.costPrice <= 1000)
-      ? Math.round(Number(item.product.costPrice) * rate)
-      : Number(item.product.costPrice || 0);
-
+    const prodCostUZS = item.product.costPrice || 0;
     const isBelowCost = prodCostUZS > 0 && priceUZS < prodCostUZS;
 
     return {
@@ -113,8 +112,9 @@ export default function POS() {
       itemCount += 1;
     });
 
-    const rate = exchangeRate || 12000;
+    const rate = exchangeRate || 12800;
     const calculatedUSD = Math.round((total / rate) * 100) / 100;
+    const hasAnyUSDItem = cart.some((it) => it.currency === 'USD');
 
     return {
       total, // UZS
@@ -122,6 +122,7 @@ export default function POS() {
       totalCost,
       totalProfit: total - totalCost,
       itemCount,
+      hasAnyUSDItem,
     };
   }, [cart, exchangeRate]);
 
@@ -129,15 +130,17 @@ export default function POS() {
   const addToCart = (product) => {
     if (Number(product.quantity) <= 0) return; // Zero-stock rule
 
-    const rate = exchangeRate || 12000;
-    const isUSDSell = product.sellCurrency === 'USD' || Boolean(product.sellPriceUSD) || (product.costCurrency === 'USD' && product.sellPrice > 0 && product.sellPrice <= 1000);
+    const rate = exchangeRate || 12800;
+    const isUSDSell = product.sellCurrency === 'USD';
     const defaultCurr = isUSDSell ? 'USD' : 'UZS';
 
     let defaultPriceInput = '';
     if (defaultCurr === 'USD') {
-      defaultPriceInput = product.sellPriceUSD || (product.sellPrice <= 1000 ? product.sellPrice : Math.round((product.sellPrice / rate) * 100) / 100);
+      defaultPriceInput = product.sellPriceUSD !== undefined && product.sellPriceUSD !== null
+        ? product.sellPriceUSD
+        : (Math.round((product.sellPrice / rate) * 100) / 100);
     } else {
-      defaultPriceInput = product.sellPrice > 1000 ? product.sellPrice : Math.round((product.sellPriceUSD || product.sellPrice) * rate);
+      defaultPriceInput = product.sellPrice || 0;
     }
 
     setCart((prev) => {
@@ -194,7 +197,7 @@ export default function POS() {
 
   // Update Currency for a single item (with auto conversion)
   const updateItemCurrency = (productId, newCurr) => {
-    const rate = exchangeRate || 12000;
+    const rate = exchangeRate || 12800;
     setCart((prev) =>
       prev.map((item) => {
         if (item.product.id === productId) {
@@ -219,7 +222,7 @@ export default function POS() {
 
   // Update Currency for all items in Cart
   const updateAllCartCurrency = (newCurr) => {
-    const rate = exchangeRate || 12000;
+    const rate = exchangeRate || 12800;
     setCart((prev) =>
       prev.map((item) => {
         if (item.currency === newCurr) return item;
@@ -452,9 +455,11 @@ export default function POS() {
 
                   <div className="mt-3 pt-2 border-t border-gray-100 flex items-center justify-between min-w-0 w-full">
                     {(() => {
-                      const isUSDSell = p.sellCurrency === 'USD' || Boolean(p.sellPriceUSD) || (p.costCurrency === 'USD' && p.sellPrice > 0 && p.sellPrice <= 1000);
-                      const pUSD = p.sellPriceUSD || (isUSDSell ? p.sellPrice : Math.round((p.sellPrice / (exchangeRate || 12000)) * 100) / 100);
-                      const pUZS = isUSDSell && p.sellPrice <= 1000 ? Math.round(pUSD * (exchangeRate || 12000)) : p.sellPrice;
+                      const isUSDSell = p.sellCurrency === 'USD';
+                      const pUSD = p.sellPriceUSD !== undefined && p.sellPriceUSD !== null
+                        ? p.sellPriceUSD
+                        : Math.round((p.sellPrice / (exchangeRate || 12800)) * 100) / 100;
+                      const pUZS = p.sellPrice || Math.round(pUSD * (exchangeRate || 12800));
 
                       if (isUSDSell) {
                         return (
@@ -698,12 +703,25 @@ export default function POS() {
                 <div className="flex items-center justify-between text-xs sm:text-sm">
                   <span className="font-semibold text-gray-500">{t('total')}:</span>
                   <div className="text-right ml-2">
-                    <span className="text-base sm:text-lg xl:text-xl font-black text-blue-700">
-                      ${formatUSD(cartTotals.totalUSD).replace('$', '')}
-                    </span>
-                    <span className="text-[11px] sm:text-xs text-gray-500 font-bold block font-mono">
-                      ({formatUZS(cartTotals.total)})
-                    </span>
+                    {cartTotals.hasAnyUSDItem ? (
+                      <>
+                        <span className="text-base sm:text-lg xl:text-xl font-black text-blue-700">
+                          ${formatUSD(cartTotals.totalUSD).replace('$', '')}
+                        </span>
+                        <span className="text-[11px] sm:text-xs text-gray-500 font-bold block font-mono">
+                          ({formatUZS(cartTotals.total)})
+                        </span>
+                      </>
+                    ) : (
+                      <>
+                        <span className="text-base sm:text-lg xl:text-xl font-black text-blue-700">
+                          {formatMoney(cartTotals.total)} so'm
+                        </span>
+                        <span className="text-[11px] sm:text-xs text-gray-400 font-medium block font-mono">
+                          (${formatUSD(cartTotals.totalUSD).replace('$', '')})
+                        </span>
+                      </>
+                    )}
                   </div>
                 </div>
 
@@ -713,7 +731,9 @@ export default function POS() {
                 >
                   <ShoppingCart className="w-4 h-4 flex-shrink-0" />
                   <span className="truncate">
-                    {t('sell_button')} (${formatUSD(cartTotals.totalUSD).replace('$', '')} / {formatMoney(cartTotals.total)} so'm)
+                    {cartTotals.hasAnyUSDItem
+                      ? `${t('sell_button')} ($${formatUSD(cartTotals.totalUSD).replace('$', '')} / ${formatMoney(cartTotals.total)} so'm)`
+                      : `${t('sell_button')} (${formatMoney(cartTotals.total)} so'm)`}
                   </span>
                 </button>
               </div>
@@ -738,7 +758,9 @@ export default function POS() {
               </div>
               <div className="flex items-center gap-2">
                 <span className="text-sm font-extrabold">
-                  ${formatUSD(cartTotals.totalUSD).replace('$', '')} ({formatUZS(cartTotals.total)})
+                  {cartTotals.hasAnyUSDItem
+                    ? `$${formatUSD(cartTotals.totalUSD).replace('$', '')} (${formatUZS(cartTotals.total)})`
+                    : `${formatMoney(cartTotals.total)} so'm`}
                 </span>
                 <ChevronRight className="w-4 h-4" />
               </div>
@@ -927,12 +949,25 @@ export default function POS() {
               <div className="flex items-center justify-between text-base font-black">
                 <span>{t('total')}:</span>
                 <div className="text-right">
-                  <span className="text-blue-700">
-                    ${formatUSD(cartTotals.totalUSD).replace('$', '')}
-                  </span>
-                  <span className="text-xs text-gray-500 font-bold block">
-                    ({formatUZS(cartTotals.total)})
-                  </span>
+                  {cartTotals.hasAnyUSDItem ? (
+                    <>
+                      <span className="text-blue-700">
+                        ${formatUSD(cartTotals.totalUSD).replace('$', '')}
+                      </span>
+                      <span className="text-xs text-gray-500 font-bold block">
+                        ({formatUZS(cartTotals.total)})
+                      </span>
+                    </>
+                  ) : (
+                    <>
+                      <span className="text-blue-700">
+                        {formatMoney(cartTotals.total)} so'm
+                      </span>
+                      <span className="text-xs text-gray-400 font-medium block">
+                        (${formatUSD(cartTotals.totalUSD).replace('$', '')})
+                      </span>
+                    </>
+                  )}
                 </div>
               </div>
               <button
@@ -954,7 +989,12 @@ export default function POS() {
               <div>
                 <h3 className="text-base font-bold text-gray-900">{t('checkout')}</h3>
                 <p className="text-xs text-gray-500">
-                  {t('total')}: <span className="font-extrabold text-blue-700">${formatUSD(cartTotals.totalUSD).replace('$', '')} ({formatUZS(cartTotals.total)})</span>
+                  {t('total')}:{' '}
+                  <span className="font-extrabold text-blue-700">
+                    {cartTotals.hasAnyUSDItem
+                      ? `$${formatUSD(cartTotals.totalUSD).replace('$', '')} (${formatUZS(cartTotals.total)})`
+                      : `${formatMoney(cartTotals.total)} so'm`}
+                  </span>
                 </p>
               </div>
               <button

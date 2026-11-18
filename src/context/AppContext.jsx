@@ -13,11 +13,45 @@ import {
 
 const AppContext = createContext();
 
+// Helper to strictly sanitize product currency and values
+export const cleanProduct = (p, currentRate = 12800) => {
+  if (!p) return p;
+  const costCurrency = p.costCurrency === 'USD' ? 'USD' : 'UZS';
+  const sellCurrency = p.sellCurrency === 'USD' ? 'USD' : 'UZS';
+
+  const costPrice = Number(p.costPrice) || 0;
+  const sellPrice = Number(p.sellPrice) || 0;
+
+  let costPriceUSD = null;
+  if (costCurrency === 'USD') {
+    costPriceUSD = p.costPriceUSD !== undefined && p.costPriceUSD !== null
+      ? Number(p.costPriceUSD)
+      : Math.round((costPrice / currentRate) * 100) / 100;
+  }
+
+  let sellPriceUSD = null;
+  if (sellCurrency === 'USD') {
+    sellPriceUSD = p.sellPriceUSD !== undefined && p.sellPriceUSD !== null
+      ? Number(p.sellPriceUSD)
+      : Math.round((sellPrice / currentRate) * 100) / 100;
+  }
+
+  return {
+    ...p,
+    costCurrency,
+    costPrice,
+    costPriceUSD,
+    sellCurrency,
+    sellPrice,
+    sellPriceUSD,
+  };
+};
+
 export function AppProvider({ children }) {
   // 1. PRODUCTS STATE (Starts empty array [] on new devices, syncs from Supabase)
   const [products, setProducts] = useState(() => {
     const saved = storage.get('products');
-    return Array.isArray(saved) ? saved : [];
+    return Array.isArray(saved) ? saved.map((p) => cleanProduct(p, 12800)) : [];
   });
 
   // 2. DEBTORS STATE (Cumulative profiles)
@@ -62,13 +96,15 @@ export function AppProvider({ children }) {
             fetchCloudExchangeRate(),
           ]);
 
+          const activeRate = Number(cloudRate) || exchangeRate || 12800;
           if (cloudRate && Number(cloudRate) > 0) {
             setExchangeRate(Number(cloudRate));
             storage.set('exchange_rate', Number(cloudRate));
           }
           if (cloudProds && cloudProds.length > 0) {
-            setProducts(cloudProds);
-            storage.set('products', cloudProds);
+            const cleanedProds = cloudProds.map((p) => cleanProduct(p, activeRate));
+            setProducts(cleanedProds);
+            storage.set('products', cleanedProds);
           }
           if (cloudDebtors && cloudDebtors.length > 0) {
             setDebtors(cloudDebtors);
@@ -91,9 +127,10 @@ export function AppProvider({ children }) {
 
   // Save helpers
   const saveProducts = (updated) => {
-    setProducts(updated);
-    storage.set('products', updated);
-    if (isSupabaseConnected()) syncToCloud('products', updated);
+    const cleaned = updated.map((p) => cleanProduct(p, exchangeRate));
+    setProducts(cleaned);
+    storage.set('products', cleaned);
+    if (isSupabaseConnected()) syncToCloud('products', cleaned);
   };
 
   const saveDebtors = (updated) => {
@@ -247,26 +284,26 @@ export function AppProvider({ children }) {
     const now = new Date().toISOString();
     const costCurrency = productData.costCurrency === 'USD' ? 'USD' : 'UZS';
     let costPrice = 0;
-    let costPriceUSD = 0;
+    let costPriceUSD = null;
 
     if (costCurrency === 'USD') {
-      costPriceUSD = Number(productData.costPriceUSD !== undefined ? productData.costPriceUSD : productData.costPrice) || 0;
+      costPriceUSD = Number(productData.costPriceUSD !== undefined && productData.costPriceUSD !== null ? productData.costPriceUSD : productData.costPrice) || 0;
       costPrice = Math.round(costPriceUSD * exchangeRate);
     } else {
       costPrice = Number(productData.costPrice) || 0;
-      costPriceUSD = Math.round((costPrice / exchangeRate) * 100) / 100;
+      costPriceUSD = null;
     }
 
     const sellCurrency = productData.sellCurrency === 'USD' ? 'USD' : 'UZS';
     let sellPrice = 0;
-    let sellPriceUSD = 0;
+    let sellPriceUSD = null;
 
     if (sellCurrency === 'USD') {
-      sellPriceUSD = Number(productData.sellPriceUSD !== undefined ? productData.sellPriceUSD : productData.sellPrice) || 0;
+      sellPriceUSD = Number(productData.sellPriceUSD !== undefined && productData.sellPriceUSD !== null ? productData.sellPriceUSD : productData.sellPrice) || 0;
       sellPrice = Math.round(sellPriceUSD * exchangeRate);
     } else {
       sellPrice = Number(productData.sellPrice) || 0;
-      sellPriceUSD = Math.round((sellPrice / exchangeRate) * 100) / 100;
+      sellPriceUSD = null;
     }
 
     const qty = Number(productData.quantity) || 0;
@@ -297,7 +334,7 @@ export function AppProvider({ children }) {
     if (supplierId && qty > 0 && costPrice > 0) {
       const selectedSup = suppliers.find((s) => s.id === supplierId);
       const isUSDSupplier = selectedSup?.currency === 'USD';
-      const incomingSum = isUSDSupplier ? (costPriceUSD * qty) : (costPrice * qty);
+      const incomingSum = isUSDSupplier ? ((costPriceUSD || (costPrice / exchangeRate)) * qty) : (costPrice * qty);
 
       const updatedSuppliers = suppliers.map((s) => {
         if (s.id === supplierId) {
@@ -328,31 +365,35 @@ export function AppProvider({ children }) {
   const updateProduct = (id, updates) => {
     const updated = products.map((p) => {
       if (p.id === id) {
-        const costCurrency = updates.costCurrency || p.costCurrency || 'UZS';
+        const costCurrency = updates.costCurrency !== undefined ? updates.costCurrency : (p.costCurrency || 'UZS');
         let costPrice = p.costPrice;
         let costPriceUSD = p.costPriceUSD;
 
-        if (updates.costPrice !== undefined || updates.costPriceUSD !== undefined) {
+        if (updates.costPrice !== undefined || updates.costPriceUSD !== undefined || updates.costCurrency !== undefined) {
           if (costCurrency === 'USD') {
-            costPriceUSD = Number(updates.costPriceUSD !== undefined ? updates.costPriceUSD : updates.costPrice) || 0;
+            costPriceUSD = Number(updates.costPriceUSD !== undefined && updates.costPriceUSD !== null
+              ? updates.costPriceUSD
+              : (updates.costPrice !== undefined ? updates.costPrice : p.costPriceUSD || 0)) || 0;
             costPrice = Math.round(costPriceUSD * exchangeRate);
           } else {
             costPrice = Number(updates.costPrice !== undefined ? updates.costPrice : p.costPrice) || 0;
-            costPriceUSD = Math.round((costPrice / exchangeRate) * 100) / 100;
+            costPriceUSD = null;
           }
         }
 
-        const sellCurrency = updates.sellCurrency || p.sellCurrency || (p.sellPriceUSD && !p.sellPrice ? 'USD' : 'UZS');
+        const sellCurrency = updates.sellCurrency !== undefined ? updates.sellCurrency : (p.sellCurrency || 'UZS');
         let sellPrice = p.sellPrice;
         let sellPriceUSD = p.sellPriceUSD;
 
-        if (updates.sellPrice !== undefined || updates.sellPriceUSD !== undefined) {
+        if (updates.sellPrice !== undefined || updates.sellPriceUSD !== undefined || updates.sellCurrency !== undefined) {
           if (sellCurrency === 'USD') {
-            sellPriceUSD = Number(updates.sellPriceUSD !== undefined ? updates.sellPriceUSD : updates.sellPrice) || 0;
+            sellPriceUSD = Number(updates.sellPriceUSD !== undefined && updates.sellPriceUSD !== null
+              ? updates.sellPriceUSD
+              : (updates.sellPrice !== undefined ? updates.sellPrice : p.sellPriceUSD || 0)) || 0;
             sellPrice = Math.round(sellPriceUSD * exchangeRate);
           } else {
             sellPrice = Number(updates.sellPrice !== undefined ? updates.sellPrice : p.sellPrice) || 0;
-            sellPriceUSD = Math.round((sellPrice / exchangeRate) * 100) / 100;
+            sellPriceUSD = null;
           }
         }
 
@@ -388,7 +429,7 @@ export function AppProvider({ children }) {
     const addQuantity = Number(addQty) || 0;
     const now = new Date().toISOString();
     let effectiveCostUZS = 0;
-    let effectiveCostUSD = 0;
+    let effectiveCostUSD = null;
     let targetSupplierId = supplierInfo.supplierId || null;
     let targetSupplierName = supplierInfo.supplierName || '';
     const purchaseMode = supplierInfo.purchasePaymentMode || 'cash';
@@ -398,22 +439,26 @@ export function AppProvider({ children }) {
     const updated = products.map((p) => {
       if (p.id === id) {
         if (costCurrency === 'USD') {
-          effectiveCostUSD = Number(supplierInfo.costPriceUSD !== undefined ? supplierInfo.costPriceUSD : newCostPrice) || p.costPriceUSD || 0;
+          effectiveCostUSD = Number(supplierInfo.costPriceUSD !== undefined && supplierInfo.costPriceUSD !== null
+            ? supplierInfo.costPriceUSD
+            : newCostPrice) || p.costPriceUSD || 0;
           effectiveCostUZS = Math.round(effectiveCostUSD * exchangeRate);
         } else {
           effectiveCostUZS = newCostPrice !== undefined && newCostPrice !== '' ? Number(newCostPrice) : (p.costPrice || 0);
-          effectiveCostUSD = Math.round((effectiveCostUZS / exchangeRate) * 100) / 100;
+          effectiveCostUSD = null;
         }
 
         let effectiveSellUZS = p.sellPrice;
         let effectiveSellUSD = p.sellPriceUSD;
         if (newSellPrice !== undefined && newSellPrice !== '') {
           if (sellCurrency === 'USD') {
-            effectiveSellUSD = Number(supplierInfo.sellPriceUSD !== undefined ? supplierInfo.sellPriceUSD : newSellPrice) || 0;
+            effectiveSellUSD = Number(supplierInfo.sellPriceUSD !== undefined && supplierInfo.sellPriceUSD !== null
+              ? supplierInfo.sellPriceUSD
+              : newSellPrice) || 0;
             effectiveSellUZS = Math.round(effectiveSellUSD * exchangeRate);
           } else {
             effectiveSellUZS = Number(newSellPrice) || 0;
-            effectiveSellUSD = Math.round((effectiveSellUZS / exchangeRate) * 100) / 100;
+            effectiveSellUSD = null;
           }
         }
 
@@ -427,10 +472,10 @@ export function AppProvider({ children }) {
           quantity: Math.max(0, Number((p.quantity + addQuantity).toFixed(2))),
           costPrice: effectiveCostUZS,
           costPriceUSD: effectiveCostUSD,
-          costCurrency: costCurrency || p.costCurrency || 'UZS',
+          costCurrency: costCurrency || 'UZS',
           sellPrice: effectiveSellUZS,
           sellPriceUSD: effectiveSellUSD,
-          sellCurrency: sellCurrency || p.sellCurrency || 'UZS',
+          sellCurrency: sellCurrency || 'UZS',
           supplierId: targetSupplierId || p.supplierId || null,
           supplierName: targetSupplierName || p.supplierName || '',
           updatedAt: now,
@@ -1067,11 +1112,12 @@ export function AppProvider({ children }) {
       throw new Error("Noto'g'ri fayl formati!");
     }
 
-    const newProducts = Array.isArray(backup.products) ? backup.products : [];
+    const rawProducts = Array.isArray(backup.products) ? backup.products : [];
     const newDebtors = Array.isArray(backup.debtors) ? backup.debtors : [];
     const newSales = Array.isArray(backup.sales) ? backup.sales : [];
     const newSuppliers = Array.isArray(backup.suppliers) ? backup.suppliers : [];
     const newRate = Number(backup.exchangeRate) || exchangeRate || 12800;
+    const newProducts = rawProducts.map((p) => cleanProduct(p, newRate));
 
     setProducts(newProducts);
     setDebtors(newDebtors);
