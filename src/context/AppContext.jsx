@@ -4,11 +4,15 @@ import { generateId, calcRealizedProfit, isDateInRange } from '../utils/helpers'
 import {
   autoInitSupabase,
   syncToCloud,
-  syncFromCloud,
+  fetchTableFromCloud,
+  saveRecordToCloud,
+  deleteRecordFromCloud,
   isSupabaseConnected,
   clearCloudTables,
   saveCloudExchangeRate,
   fetchCloudExchangeRate,
+  broadcastDbChange,
+  initRealtimeSync,
 } from '../utils/supabase';
 
 const AppContext = createContext();
@@ -81,74 +85,188 @@ export function AppProvider({ children }) {
   // 6. CLOUD SYNC STATUS
   const [isCloudConnected, setIsCloudConnected] = useState(false);
 
-  // Initialize Supabase on mount and sync real data from cloud
-  useEffect(() => {
-    const client = autoInitSupabase();
-    if (client) {
-      setIsCloudConnected(true);
-      (async () => {
-        try {
-          const [cloudProds, cloudDebtors, cloudSales, cloudSuppliers, cloudRate] = await Promise.all([
-            syncFromCloud('products'),
-            syncFromCloud('debtors'),
-            syncFromCloud('sales'),
-            syncFromCloud('suppliers'),
-            fetchCloudExchangeRate(),
-          ]);
-
-          const activeRate = Number(cloudRate) || exchangeRate || 12800;
-          if (cloudRate && Number(cloudRate) > 0) {
-            setExchangeRate(Number(cloudRate));
-            storage.set('exchange_rate', Number(cloudRate));
-          }
-          if (cloudProds && cloudProds.length > 0) {
-            const cleanedProds = cloudProds.map((p) => cleanProduct(p, activeRate));
-            setProducts(cleanedProds);
-            storage.set('products', cleanedProds);
-          }
-          if (cloudDebtors && cloudDebtors.length > 0) {
-            setDebtors(cloudDebtors);
-            storage.set('debtors', cloudDebtors);
-          }
-          if (cloudSales && cloudSales.length > 0) {
-            setSales(cloudSales);
-            storage.set('sales', cloudSales);
-          }
-          if (cloudSuppliers && cloudSuppliers.length > 0) {
-            setSuppliers(cloudSuppliers);
-            storage.set('suppliers', cloudSuppliers);
-          }
-        } catch (e) {
-          console.error("Cloud fetch error on mount:", e);
-        }
-      })();
+  // Helper to fetch all tables directly from Supabase (Single Source of Truth)
+  const syncAllFromCloud = useCallback(async (forcedRate) => {
+    if (!isSupabaseConnected()) {
+      autoInitSupabase();
     }
-  }, []);
+    if (!isSupabaseConnected()) return false;
 
-  // Save helpers
-  const saveProducts = (updated) => {
+    try {
+      const [prodsRes, debtorsRes, salesRes, suppliersRes, cloudRate] = await Promise.all([
+        fetchTableFromCloud('products'),
+        fetchTableFromCloud('debtors'),
+        fetchTableFromCloud('sales'),
+        fetchTableFromCloud('suppliers'),
+        fetchCloudExchangeRate(),
+      ]);
+
+      const activeRate = Number(cloudRate) || forcedRate || exchangeRate || 12800;
+      if (cloudRate && Number(cloudRate) > 0) {
+        setExchangeRate(Number(cloudRate));
+        storage.set('exchange_rate', Number(cloudRate));
+      }
+
+      // CRITICAL: Supabase is the Single Source of Truth!
+      // If Supabase returned success (even with 0 records []), it OVERWRITES localStorage!
+      if (prodsRes.success) {
+        const cleaned = prodsRes.data.map((p) => cleanProduct(p, activeRate));
+        setProducts(cleaned);
+        storage.set('products', cleaned);
+      }
+
+      if (debtorsRes.success) {
+        setDebtors(debtorsRes.data);
+        storage.set('debtors', debtorsRes.data);
+      }
+
+      if (salesRes.success) {
+        setSales(salesRes.data);
+        storage.set('sales', salesRes.data);
+      }
+
+      if (suppliersRes.success) {
+        setSuppliers(suppliersRes.data);
+        storage.set('suppliers', suppliersRes.data);
+      }
+
+      setIsCloudConnected(true);
+      return true;
+    } catch (err) {
+      console.warn('Cloud sync error on mount:', err);
+      return false;
+    }
+  }, [exchangeRate]);
+
+  // Realtime multi-device sync and reconnection listeners
+  useEffect(() => {
+    autoInitSupabase();
+    syncAllFromCloud();
+
+    // 1. Multi-device Realtime channel (PC <-> Honor X9c phone <-> Tablet)
+    const unsubscribe = initRealtimeSync((event) => {
+      if (!event) return;
+
+      if (event.action === 'wipe_all') {
+        setProducts([]);
+        setDebtors([]);
+        setSales([]);
+        setSuppliers([]);
+        storage.set('products', []);
+        storage.set('debtors', []);
+        storage.set('sales', []);
+        storage.set('suppliers', []);
+        return;
+      }
+
+      const table = event.table;
+      if (!table) {
+        syncAllFromCloud();
+        return;
+      }
+
+      if (table === 'products') {
+        fetchTableFromCloud('products').then((res) => {
+          if (res.success) {
+            const cleaned = res.data.map((p) => cleanProduct(p, exchangeRate));
+            setProducts(cleaned);
+            storage.set('products', cleaned);
+          }
+        });
+      } else if (table === 'debtors') {
+        fetchTableFromCloud('debtors').then((res) => {
+          if (res.success) {
+            setDebtors(res.data);
+            storage.set('debtors', res.data);
+          }
+        });
+      } else if (table === 'sales') {
+        fetchTableFromCloud('sales').then((res) => {
+          if (res.success) {
+            setSales(res.data);
+            storage.set('sales', res.data);
+          }
+        });
+      } else if (table === 'suppliers') {
+        fetchTableFromCloud('suppliers').then((res) => {
+          if (res.success) {
+            setSuppliers(res.data);
+            storage.set('suppliers', res.data);
+          }
+        });
+      } else if (table === 'settings') {
+        fetchCloudExchangeRate().then((rate) => {
+          if (rate && Number(rate) > 0) {
+            setExchangeRate(Number(rate));
+            storage.set('exchange_rate', Number(rate));
+          }
+        });
+      }
+    });
+
+    // 2. Re-sync on window focus / visibility change / online event (e.g. phone screen unlocked)
+    const handleRecheck = () => {
+      if (document.visibilityState === 'visible') {
+        syncAllFromCloud();
+      }
+    };
+
+    window.addEventListener('focus', handleRecheck);
+    window.addEventListener('online', handleRecheck);
+    document.addEventListener('visibilitychange', handleRecheck);
+
+    return () => {
+      unsubscribe();
+      window.removeEventListener('focus', handleRecheck);
+      window.removeEventListener('online', handleRecheck);
+      document.removeEventListener('visibilitychange', handleRecheck);
+    };
+  }, [syncAllFromCloud, exchangeRate]);
+
+  // Save helpers (Immediate local write + Supabase sync + Realtime broadcast)
+  const saveProducts = (updated, shouldBroadcast = true) => {
     const cleaned = updated.map((p) => cleanProduct(p, exchangeRate));
     setProducts(cleaned);
     storage.set('products', cleaned);
-    if (isSupabaseConnected()) syncToCloud('products', cleaned);
+    if (isSupabaseConnected()) {
+      syncToCloud('products', cleaned);
+      if (shouldBroadcast) {
+        broadcastDbChange({ table: 'products', action: 'sync' });
+      }
+    }
   };
 
-  const saveDebtors = (updated) => {
+  const saveDebtors = (updated, shouldBroadcast = true) => {
     setDebtors(updated);
     storage.set('debtors', updated);
-    if (isSupabaseConnected()) syncToCloud('debtors', updated);
+    if (isSupabaseConnected()) {
+      syncToCloud('debtors', updated);
+      if (shouldBroadcast) {
+        broadcastDbChange({ table: 'debtors', action: 'sync' });
+      }
+    }
   };
 
-  const saveSales = (updated) => {
+  const saveSales = (updated, shouldBroadcast = true) => {
     setSales(updated);
     storage.set('sales', updated);
-    if (isSupabaseConnected()) syncToCloud('sales', updated);
+    if (isSupabaseConnected()) {
+      syncToCloud('sales', updated);
+      if (shouldBroadcast) {
+        broadcastDbChange({ table: 'sales', action: 'sync' });
+      }
+    }
   };
 
-  const saveSuppliers = (updated) => {
+  const saveSuppliers = (updated, shouldBroadcast = true) => {
     setSuppliers(updated);
     storage.set('suppliers', updated);
-    if (isSupabaseConnected()) syncToCloud('suppliers', updated);
+    if (isSupabaseConnected()) {
+      syncToCloud('suppliers', updated);
+      if (shouldBroadcast) {
+        broadcastDbChange({ table: 'suppliers', action: 'sync' });
+      }
+    }
   };
 
   // Update Exchange Rate (USD to UZS)
@@ -160,6 +278,7 @@ export function AppProvider({ children }) {
     storage.set('exchange_rate', rate);
     if (isSupabaseConnected()) {
       await saveCloudExchangeRate(rate);
+      broadcastDbChange({ table: 'settings', action: 'exchange_rate', rate });
     }
 
     // Recalculate converted UZS costPrice and sellPrice for all products with USD
@@ -208,14 +327,20 @@ export function AppProvider({ children }) {
       updatedAt: now,
     };
     const updated = [...suppliers, newSupplier];
-    saveSuppliers(updated);
+    setSuppliers(updated);
+    storage.set('suppliers', updated);
+    if (isSupabaseConnected()) {
+      saveRecordToCloud('suppliers', newSupplier);
+      broadcastDbChange({ table: 'suppliers', action: 'add', record: newSupplier });
+    }
     return newSupplier;
   };
 
   const updateSupplier = (id, updates) => {
+    let updatedSupplierItem = null;
     const updated = suppliers.map((s) => {
       if (s.id === id) {
-        return {
+        updatedSupplierItem = {
           ...s,
           ...updates,
           name: updates.name !== undefined ? updates.name.trim() : s.name,
@@ -223,15 +348,26 @@ export function AppProvider({ children }) {
           currency: updates.currency !== undefined ? updates.currency : (s.currency || 'UZS'),
           updatedAt: new Date().toISOString(),
         };
+        return updatedSupplierItem;
       }
       return s;
     });
-    saveSuppliers(updated);
+    setSuppliers(updated);
+    storage.set('suppliers', updated);
+    if (isSupabaseConnected() && updatedSupplierItem) {
+      saveRecordToCloud('suppliers', updatedSupplierItem);
+      broadcastDbChange({ table: 'suppliers', action: 'update', record: updatedSupplierItem });
+    }
   };
 
   const deleteSupplier = (id) => {
     const updated = suppliers.filter((s) => s.id !== id);
-    saveSuppliers(updated);
+    setSuppliers(updated);
+    storage.set('suppliers', updated);
+    if (isSupabaseConnected()) {
+      deleteRecordFromCloud('suppliers', id);
+      broadcastDbChange({ table: 'suppliers', action: 'delete', id });
+    }
   };
 
   // Record payment to supplier (supports USD or UZS)
@@ -311,7 +447,7 @@ export function AppProvider({ children }) {
     const supplierName = productData.supplierName || '';
     const paymentMode = productData.purchasePaymentMode || 'cash'; // 'cash' or 'credit'
 
-    const newProduct = {
+    const rawProduct = {
       id: generateId(),
       name: productData.name.trim(),
       artikul: (productData.artikul || '').trim(),
@@ -327,8 +463,15 @@ export function AppProvider({ children }) {
       createdAt: now,
       updatedAt: now,
     };
-    const updatedProducts = [newProduct, ...products];
-    saveProducts(updatedProducts);
+    const cleanedProduct = cleanProduct(rawProduct, exchangeRate);
+    const updatedProducts = [cleanedProduct, ...products];
+    setProducts(updatedProducts);
+    storage.set('products', updatedProducts);
+
+    if (isSupabaseConnected()) {
+      saveRecordToCloud('products', cleanedProduct);
+      broadcastDbChange({ table: 'products', action: 'add', record: cleanedProduct });
+    }
 
     // If supplier selected and quantity > 0 and cost > 0, record incoming purchase in supplier's currency
     if (supplierId && qty > 0 && costPrice > 0) {
@@ -356,13 +499,19 @@ export function AppProvider({ children }) {
         }
         return s;
       });
-      saveSuppliers(updatedSuppliers);
+      setSuppliers(updatedSuppliers);
+      storage.set('suppliers', updatedSuppliers);
+      if (isSupabaseConnected()) {
+        syncToCloud('suppliers', updatedSuppliers);
+        broadcastDbChange({ table: 'suppliers', action: 'update' });
+      }
     }
 
-    return newProduct;
+    return cleanedProduct;
   };
 
   const updateProduct = (id, updates) => {
+    let updatedProductItem = null;
     const updated = products.map((p) => {
       if (p.id === id) {
         const costCurrency = updates.costCurrency !== undefined ? updates.costCurrency : (p.costCurrency || 'UZS');
@@ -397,7 +546,7 @@ export function AppProvider({ children }) {
           }
         }
 
-        return {
+        updatedProductItem = cleanProduct({
           ...p,
           ...updates,
           name: updates.name !== undefined ? updates.name.trim() : p.name,
@@ -412,16 +561,29 @@ export function AppProvider({ children }) {
           supplierId: updates.supplierId !== undefined ? updates.supplierId : p.supplierId,
           supplierName: updates.supplierName !== undefined ? updates.supplierName : p.supplierName,
           updatedAt: new Date().toISOString(),
-        };
+        }, exchangeRate);
+        return updatedProductItem;
       }
       return p;
     });
-    saveProducts(updated);
+
+    setProducts(updated);
+    storage.set('products', updated);
+
+    if (isSupabaseConnected() && updatedProductItem) {
+      saveRecordToCloud('products', updatedProductItem);
+      broadcastDbChange({ table: 'products', action: 'update', record: updatedProductItem });
+    }
   };
 
   const deleteProduct = (id) => {
     const updated = products.filter((p) => p.id !== id);
-    saveProducts(updated);
+    setProducts(updated);
+    storage.set('products', updated);
+    if (isSupabaseConnected()) {
+      deleteRecordFromCloud('products', id);
+      broadcastDbChange({ table: 'products', action: 'delete', id });
+    }
   };
 
   // Restock existing product: adds to current quantity, updates prices and optionally supplier accounting
@@ -1168,6 +1330,7 @@ export function AppProvider({ children }) {
 
     if (isSupabaseConnected()) {
       await clearCloudTables();
+      broadcastDbChange({ action: 'wipe_all' });
     }
   };
 

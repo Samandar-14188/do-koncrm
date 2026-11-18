@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import { storage } from '../utils/storage';
-import { saveCloudPasswords, fetchCloudPasswords, autoInitSupabase } from '../utils/supabase';
+import { saveCloudPasswords, fetchCloudPasswords, autoInitSupabase, broadcastDbChange } from '../utils/supabase';
 
 const AuthContext = createContext();
 
@@ -19,29 +19,42 @@ export function AuthProvider({ children }) {
     return storage.get('passwords', DEFAULT_PASSWORDS);
   });
 
-  // On mount, auto-init Supabase and sync cloud passwords
+  // Sync cloud passwords
+  const syncPasswordsFromCloud = useCallback(async () => {
+    try {
+      const cloud = await fetchCloudPasswords();
+      if (cloud) {
+        const merged = {
+          admin: cloud.admin || DEFAULT_PASSWORDS.admin,
+          seller: cloud.seller || DEFAULT_PASSWORDS.seller,
+        };
+        setPasswords(merged);
+        storage.set('passwords', merged);
+      }
+    } catch (e) {
+      console.warn('Could not sync cloud passwords:', e);
+    }
+  }, []);
+
+  // On mount and visibility/focus change, sync cloud passwords
   useEffect(() => {
     autoInitSupabase();
-    let isMounted = true;
-    (async () => {
-      try {
-        const cloud = await fetchCloudPasswords();
-        if (cloud && isMounted) {
-          const merged = {
-            admin: cloud.admin || DEFAULT_PASSWORDS.admin,
-            seller: cloud.seller || DEFAULT_PASSWORDS.seller,
-          };
-          setPasswords(merged);
-          storage.set('passwords', merged);
-        }
-      } catch (e) {
-        console.warn('Could not sync cloud passwords on mount:', e);
+    syncPasswordsFromCloud();
+
+    const handleFocus = () => {
+      if (document.visibilityState === 'visible') {
+        syncPasswordsFromCloud();
       }
-    })();
-    return () => {
-      isMounted = false;
     };
-  }, []);
+
+    window.addEventListener('focus', handleFocus);
+    document.addEventListener('visibilitychange', handleFocus);
+
+    return () => {
+      window.removeEventListener('focus', handleFocus);
+      document.removeEventListener('visibilitychange', handleFocus);
+    };
+  }, [syncPasswordsFromCloud]);
 
   // Update passwords (both admin and seller or either)
   const updatePasswords = useCallback(async ({ admin, seller }) => {
@@ -57,9 +70,10 @@ export function AuthProvider({ children }) {
     // 2. Persist to localStorage immediately
     storage.set('passwords', updated);
 
-    // 3. Persist to Supabase cloud settings table
+    // 3. Persist to Supabase cloud settings table and broadcast to other devices
     try {
       await saveCloudPasswords(updated);
+      broadcastDbChange({ table: 'settings', action: 'auth_passwords', passwords: updated });
     } catch (e) {
       console.error('Failed to sync passwords to Supabase:', e);
     }
