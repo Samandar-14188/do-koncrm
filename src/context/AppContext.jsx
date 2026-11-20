@@ -110,86 +110,52 @@ export function AppProvider({ children }) {
         storage.set('exchange_rate', Number(cloudRate));
       }
 
-      // 1. PRODUCTS: Reconcile and push unsynced local products to Supabase
-      const localProducts = storage.get('products') || [];
+      // 1. PRODUCTS: Supabase is the single source of truth
       if (prodsRes.success) {
-        if (prodsRes.data.length === 0 && localProducts.length > 0) {
-          console.log(`Pushing ${localProducts.length} unsynced local products to Supabase`);
-          await syncToCloud('products', localProducts);
-          const cleaned = localProducts.map((p) => cleanProduct(p, activeRate));
-          setProducts(cleaned);
-          storage.set('products', cleaned);
-        } else {
-          const cloudIds = new Set(prodsRes.data.map((p) => String(p.id)));
-          const unsynced = localProducts.filter((p) => !cloudIds.has(String(p.id)));
-          if (unsynced.length > 0) {
-            console.log(`Pushing ${unsynced.length} missing local products to Supabase`);
-            await syncToCloud('products', unsynced);
+        const deletedProductIds = new Set(storage.get('deleted_products_ids') || []);
+        for (const delId of deletedProductIds) {
+          if (prodsRes.data.some((p) => String(p.id) === delId)) {
+            deleteRecordFromCloud('products', delId);
           }
-          const merged = [...prodsRes.data, ...unsynced].map((p) => cleanProduct(p, activeRate));
-          setProducts(merged);
-          storage.set('products', merged);
         }
+        const validCloudProducts = prodsRes.data
+          .filter((p) => !deletedProductIds.has(String(p.id)) && !String(p.id).startsWith('prod-'))
+          .map((p) => cleanProduct(p, activeRate));
+
+        setProducts(validCloudProducts);
+        storage.set('products', validCloudProducts);
       }
 
-      // 2. DEBTORS: Reconcile and push unsynced local debtors to Supabase
-      const localDebtors = storage.get('debtors') || [];
+      // 2. DEBTORS: Supabase is the single source of truth
       if (debtorsRes.success) {
-        if (debtorsRes.data.length === 0 && localDebtors.length > 0) {
-          console.log(`Pushing ${localDebtors.length} unsynced local debtors to Supabase`);
-          await syncToCloud('debtors', localDebtors);
-          setDebtors(localDebtors);
-          storage.set('debtors', localDebtors);
-        } else {
-          const cloudIds = new Set(debtorsRes.data.map((d) => String(d.id)));
-          const unsynced = localDebtors.filter((d) => !cloudIds.has(String(d.id)));
-          if (unsynced.length > 0) {
-            await syncToCloud('debtors', unsynced);
+        const deletedDebtorIds = new Set(storage.get('deleted_debtors_ids') || []);
+        for (const delId of deletedDebtorIds) {
+          if (debtorsRes.data.some((d) => String(d.id) === delId)) {
+            deleteRecordFromCloud('debtors', delId);
           }
-          const merged = [...debtorsRes.data, ...unsynced];
-          setDebtors(merged);
-          storage.set('debtors', merged);
         }
+        const validDebtors = debtorsRes.data.filter((d) => !deletedDebtorIds.has(String(d.id)));
+        setDebtors(validDebtors);
+        storage.set('debtors', validDebtors);
       }
 
-      // 3. SALES: Reconcile and push unsynced local sales to Supabase
-      const localSales = storage.get('sales') || [];
+      // 3. SALES: Supabase is the single source of truth
       if (salesRes.success) {
-        if (salesRes.data.length === 0 && localSales.length > 0) {
-          console.log(`Pushing ${localSales.length} unsynced local sales to Supabase`);
-          await syncToCloud('sales', localSales);
-          setSales(localSales);
-          storage.set('sales', localSales);
-        } else {
-          const cloudIds = new Set(salesRes.data.map((s) => String(s.id)));
-          const unsynced = localSales.filter((s) => !cloudIds.has(String(s.id)));
-          if (unsynced.length > 0) {
-            await syncToCloud('sales', unsynced);
-          }
-          const merged = [...salesRes.data, ...unsynced];
-          setSales(merged);
-          storage.set('sales', merged);
-        }
+        setSales(salesRes.data);
+        storage.set('sales', salesRes.data);
       }
 
-      // 4. SUPPLIERS: Reconcile and push unsynced local suppliers to Supabase
-      const localSuppliers = storage.get('suppliers') || [];
+      // 4. SUPPLIERS: Supabase is the single source of truth
       if (suppliersRes.success) {
-        if (suppliersRes.data.length === 0 && localSuppliers.length > 0) {
-          console.log(`Pushing ${localSuppliers.length} unsynced local suppliers to Supabase`);
-          await syncToCloud('suppliers', localSuppliers);
-          setSuppliers(localSuppliers);
-          storage.set('suppliers', localSuppliers);
-        } else {
-          const cloudIds = new Set(suppliersRes.data.map((s) => String(s.id)));
-          const unsynced = localSuppliers.filter((s) => !cloudIds.has(String(s.id)));
-          if (unsynced.length > 0) {
-            await syncToCloud('suppliers', unsynced);
+        const deletedSupplierIds = new Set(storage.get('deleted_suppliers_ids') || []);
+        for (const delId of deletedSupplierIds) {
+          if (suppliersRes.data.some((s) => String(s.id) === delId)) {
+            deleteRecordFromCloud('suppliers', delId);
           }
-          const merged = [...suppliersRes.data, ...unsynced];
-          setSuppliers(merged);
-          storage.set('suppliers', merged);
         }
+        const validSuppliers = suppliersRes.data.filter((s) => !deletedSupplierIds.has(String(s.id)));
+        setSuppliers(validSuppliers);
+        storage.set('suppliers', validSuppliers);
       }
 
       setIsCloudConnected(true);
@@ -422,12 +388,30 @@ export function AppProvider({ children }) {
     }
   };
 
-  const deleteSupplier = (id) => {
+  const deleteSupplier = async (id) => {
     const updated = suppliers.filter((s) => s.id !== id);
     setSuppliers(updated);
     storage.set('suppliers', updated);
+
+    // Track in deleted_suppliers_ids blacklist in localStorage
+    const deletedIds = new Set(storage.get('deleted_suppliers_ids') || []);
+    deletedIds.add(String(id));
+    storage.set('deleted_suppliers_ids', Array.from(deletedIds));
+
     if (isSupabaseConnected()) {
-      deleteRecordFromCloud('suppliers', id);
+      await deleteRecordFromCloud('suppliers', id);
+      try {
+        const client = getSupabase();
+        if (client) {
+          await client.from('settings').upsert([
+            {
+              id: 'store_suppliers',
+              data: updated,
+              updated_at: new Date().toISOString(),
+            },
+          ], { onConflict: 'id' });
+        }
+      } catch (_) {}
       broadcastDbChange({ table: 'suppliers', action: 'delete', id });
     }
   };
@@ -633,13 +617,19 @@ export function AppProvider({ children }) {
     }
   };
 
-  const deleteProduct = (id) => {
+  const deleteProduct = async (id) => {
     const prodToDelete = products.find((p) => p.id === id);
     const updated = products.filter((p) => p.id !== id);
     setProducts(updated);
     storage.set('products', updated);
+
+    // Track in deleted_products_ids blacklist in localStorage
+    const deletedIds = new Set(storage.get('deleted_products_ids') || []);
+    deletedIds.add(String(id));
+    storage.set('deleted_products_ids', Array.from(deletedIds));
+
     if (isSupabaseConnected()) {
-      deleteRecordFromCloud('products', id);
+      await deleteRecordFromCloud('products', id);
       broadcastDbChange({ table: 'products', action: 'delete', id });
     }
 
@@ -1344,26 +1334,40 @@ export function AppProvider({ children }) {
 
       // Dynamic reconciliation for live recalculation:
       // Active goods value received from this supplier = remaining warehouse stock + goods already sold
-      const liveActiveGoodsReceived = isUSD ? (stockCostUSD + soldCostUSD) : (stockCostUZS + soldCostUZS);
+      const actualGoodsLoad = isUSD ? (stockCostUSD + soldCostUSD) : (stockCostUZS + soldCostUZS);
 
-      const recordedPaid = (sup.payments || []).reduce((sum, pm) => sum + Number(pm.debtDeduction || pm.amount || 0), 0);
-      const totalPaid = Math.max(Number(sup.totalPaid || 0), recordedPaid);
+      const explicitPaid = (sup.payments || []).reduce(
+        (sum, pm) => sum + Number(pm.debtDeduction || pm.amount || 0),
+        0
+      );
 
-      let dynamicPurchased = Number(sup.totalPurchased || 0);
-      if (dynamicPurchased < liveActiveGoodsReceived) {
-        dynamicPurchased = liveActiveGoodsReceived;
+      let dynamicPurchased = 0;
+      let dynamicPaid = 0;
+      let dynamicDebt = 0;
+
+      if (actualGoodsLoad <= 0) {
+        // When stock is 0 and no sales: NO stale load or phantom paid amounts!
+        dynamicPurchased = explicitPaid;
+        dynamicPaid = explicitPaid;
+        dynamicDebt = 0;
+      } else {
+        dynamicPurchased = actualGoodsLoad;
+
+        const recordedDebt = Number(sup.debtBalance || 0);
+        if (recordedDebt > 0) {
+          dynamicDebt = Math.max(0, Math.min(actualGoodsLoad, recordedDebt));
+          dynamicPaid = Math.max(0, actualGoodsLoad - dynamicDebt) + explicitPaid;
+        } else {
+          dynamicDebt = 0;
+          dynamicPaid = actualGoodsLoad + explicitPaid;
+        }
       }
-      if (dynamicPurchased > liveActiveGoodsReceived + totalPaid) {
-        dynamicPurchased = liveActiveGoodsReceived + totalPaid;
-      }
-
-      const dynamicDebt = Math.max(0, dynamicPurchased - totalPaid);
 
       return {
         ...sup,
         currency: isUSD ? 'USD' : 'UZS',
         totalPurchased: Number(dynamicPurchased.toFixed(2)),
-        totalPaid: Number(totalPaid.toFixed(2)),
+        totalPaid: Number(dynamicPaid.toFixed(2)),
         debtBalance: Number(dynamicDebt.toFixed(2)),
         stockCostValue: Math.round(stockCostUZS),
         stockCostValueUSD: Number(stockCostUSD.toFixed(2)),
@@ -1461,6 +1465,9 @@ export function AppProvider({ children }) {
     storage.set('debtors', []);
     storage.set('sales', []);
     storage.set('suppliers', []);
+    storage.set('deleted_products_ids', []);
+    storage.set('deleted_suppliers_ids', []);
+    storage.set('deleted_debtors_ids', []);
 
     if (isSupabaseConnected()) {
       await clearCloudTables();

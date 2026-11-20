@@ -18,13 +18,14 @@ import {
   CreditCard,
   Banknote,
   DollarSign,
-  X
+  X,
+  Trash2
 } from 'lucide-react';
 
 export default function Reports() {
   const { t, transliterate } = useLanguage();
   const { isAdmin } = useAuth();
-  const { getReportData, products, sales, debtors, suppliers, paySupplierDebt, exchangeRate } = useApp();
+  const { getReportData, products, sales, debtors, suppliers, paySupplierDebt, deleteSupplier, exchangeRate } = useApp();
 
   // Date range filter
   const [dateRange, setDateRange] = useState('today'); // 'today', 'yesterday', 'week', 'month', 'all'
@@ -85,6 +86,22 @@ export default function Reports() {
 
     showToast(t('supplier_debt_paid'));
     setPayingSupplier(null);
+  };
+
+  const handleDeleteSupplier = (sup) => {
+    const hasProducts = products.some((p) => p.supplierId === sup.id);
+    const hasDebt = (sup.debtBalance || 0) > 0;
+    let confirmMsg = `"${sup.name}" yetkazib beruvchisini o'chirmoqchimisiz?`;
+    if (hasDebt) {
+      confirmMsg += `\nDiqqat: Ushbu yetkazib beruvchiga qarz mavjud!`;
+    }
+    if (hasProducts) {
+      confirmMsg += `\nOmbordagi tegishli tovarlar saqlanib qoladi.`;
+    }
+    if (window.confirm(confirmMsg)) {
+      deleteSupplier(sup.id);
+      showToast(`"${sup.name}" yetkazib beruvchisi o'chirildi`);
+    }
   };
 
   // Export to Excel with 4 sheets: Ombor_Qoldiq, Sotuvlar_va_Foyda, Qarzdorlar, Yetkazib_beruvchilar
@@ -403,22 +420,33 @@ export default function Reports() {
                         )}
                       </div>
 
-                      {hasDebt ? (
-                        <div className="text-right">
-                          <span className="badge-danger text-[11px] font-bold whitespace-nowrap block">
-                            Qarzimiz: {isUSD ? formatUSD(sup.debtBalance) : formatUZS(sup.debtBalance)}
+                      <div className="flex items-center gap-1.5 flex-shrink-0">
+                        {hasDebt ? (
+                          <div className="text-right">
+                            <span className="badge-danger text-[11px] font-bold whitespace-nowrap block">
+                              Qarzimiz: {isUSD ? formatUSD(sup.debtBalance) : formatUZS(sup.debtBalance)}
+                            </span>
+                            <span className="text-[10px] text-gray-500 font-mono mt-0.5 block whitespace-nowrap">
+                              {isUSD
+                                ? `≈ ${formatUZS(sup.debtBalance * exchangeRate)}`
+                                : `≈ ${formatUSD(exchangeRate > 0 ? sup.debtBalance / exchangeRate : 0)}`}
+                            </span>
+                          </div>
+                        ) : (
+                          <span className="badge-success text-[11px] font-semibold whitespace-nowrap">
+                            Qarz yo'q
                           </span>
-                          <span className="text-[10px] text-gray-500 font-mono mt-0.5 block whitespace-nowrap">
-                            {isUSD
-                              ? `≈ ${formatUZS(sup.debtBalance * exchangeRate)}`
-                              : `≈ ${formatUSD(exchangeRate > 0 ? sup.debtBalance / exchangeRate : 0)}`}
-                          </span>
-                        </div>
-                      ) : (
-                        <span className="badge-success text-[11px] font-semibold whitespace-nowrap">
-                          Qarz yo'q
-                        </span>
-                      )}
+                        )}
+
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteSupplier(sup)}
+                          className="p-1 text-gray-400 hover:text-red-600 rounded-lg hover:bg-red-50 transition-colors ml-0.5"
+                          title="Yetkazib beruvchini o'chirish"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
                     </div>
 
                     {/* Financial Metrics Grid */}
