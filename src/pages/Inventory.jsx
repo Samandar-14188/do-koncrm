@@ -329,10 +329,10 @@ export default function Inventory() {
   };
 
   // Confirm Delete
-  const handleDeleteProduct = (id) => {
-    deleteProduct(id);
+  const handleDeleteProduct = async (id) => {
     setDeleteConfirmId(null);
     showToast(t('product_deleted'));
+    await deleteProduct(id);
   };
 
   return (

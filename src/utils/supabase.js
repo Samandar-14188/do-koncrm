@@ -156,17 +156,23 @@ export async function saveRecordToCloud(tableName, record) {
 // -------------------------------------------------------------
 export async function deleteRecordFromCloud(tableName, recordId) {
   if (!supabaseClient) autoInitSupabase();
-  if (!supabaseClient || recordId === undefined) return { error: 'Not connected' };
+  if (!supabaseClient || recordId === undefined || recordId === null) return { success: false, error: 'Not connected' };
 
   try {
-    const { data, error } = await supabaseClient
+    const strId = String(recordId).trim();
+    const { data, error, count } = await supabaseClient
       .from(tableName)
-      .delete()
-      .eq('id', String(recordId));
+      .delete({ count: 'exact' })
+      .eq('id', strId);
+
+    if (error) {
+      console.error(`deleteRecordFromCloud ${tableName} error:`, error);
+      return { success: false, error: error.message };
+    }
 
     if (tableName === 'suppliers') {
       try {
-        const remainingSuppliers = (storage.get('suppliers') || []).filter((s) => String(s.id) !== String(recordId));
+        const remainingSuppliers = (storage.get('suppliers') || []).filter((s) => String(s.id).trim() !== strId);
         await supabaseClient.from('settings').upsert([
           {
             id: 'store_suppliers',
@@ -177,11 +183,10 @@ export async function deleteRecordFromCloud(tableName, recordId) {
       } catch (_) {}
     }
 
-    if (error) console.error(`deleteRecordFromCloud ${tableName} error:`, error);
-    return { data, error };
+    return { success: true, count, data };
   } catch (e) {
     console.error(`deleteRecordFromCloud ${tableName} error:`, e);
-    return { error: e.message };
+    return { success: false, error: e.message };
   }
 }
 
@@ -350,6 +355,11 @@ export async function clearCloudTables() {
   }
 }
 
+// Unique session identifier to prevent self-echo and delete-resurrect race conditions
+export const CLIENT_SESSION_ID = typeof crypto !== 'undefined' && crypto.randomUUID
+  ? crypto.randomUUID()
+  : Math.random().toString(36).substring(2, 9);
+
 // -------------------------------------------------------------
 // Realtime Broadcast across devices (PC <-> Phone <-> Tablet)
 // -------------------------------------------------------------
@@ -370,7 +380,7 @@ export function broadcastDbChange(actionData) {
       event: 'db_change',
       payload: {
         ...actionData,
-        senderId: Math.random().toString(36).substring(2, 9),
+        senderId: CLIENT_SESSION_ID,
         timestamp: Date.now(),
       },
     });
@@ -400,6 +410,8 @@ export function initRealtimeSync(onEvent) {
     // 1. Broadcast Listener (instant <50ms sync between PC and phone)
     channel.on('broadcast', { event: 'db_change' }, (msg) => {
       if (onEvent && msg && msg.payload) {
+        // Skip events originated by ourselves to prevent race conditions
+        if (msg.payload.senderId === CLIENT_SESSION_ID) return;
         onEvent(msg.payload);
       }
     });
@@ -412,8 +424,10 @@ export function initRealtimeSync(onEvent) {
           onEvent({
             source: 'postgres_changes',
             table: t,
+            action: payload.eventType === 'DELETE' ? 'delete' : (payload.eventType === 'INSERT' ? 'add' : 'update'),
             eventType: payload.eventType,
-            new: payload.new,
+            id: payload.old?.id || payload.new?.id,
+            record: payload.new,
             old: payload.old,
           });
         }

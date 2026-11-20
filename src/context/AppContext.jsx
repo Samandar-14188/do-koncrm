@@ -57,13 +57,19 @@ export function AppProvider({ children }) {
   // 1. PRODUCTS STATE (Starts empty array [] on new devices, syncs from Supabase)
   const [products, setProducts] = useState(() => {
     const saved = storage.get('products');
-    return Array.isArray(saved) ? saved.map((p) => cleanProduct(p, 12800)) : [];
+    const deleted = new Set(storage.get('deleted_products_ids') || []);
+    return Array.isArray(saved)
+      ? saved
+          .filter((p) => !deleted.has(String(p.id)) && !String(p.id).startsWith('prod-'))
+          .map((p) => cleanProduct(p, 12800))
+      : [];
   });
 
   // 2. DEBTORS STATE (Cumulative profiles)
   const [debtors, setDebtors] = useState(() => {
     const saved = storage.get('debtors');
-    return Array.isArray(saved) ? saved : [];
+    const deleted = new Set(storage.get('deleted_debtors_ids') || []);
+    return Array.isArray(saved) ? saved.filter((d) => !deleted.has(String(d.id))) : [];
   });
 
   // 3. SALES STATE
@@ -75,7 +81,8 @@ export function AppProvider({ children }) {
   // 4. SUPPLIERS STATE (Yetkazib beruvchilar)
   const [suppliers, setSuppliers] = useState(() => {
     const saved = storage.get('suppliers');
-    return Array.isArray(saved) ? saved : [];
+    const deleted = new Set(storage.get('deleted_suppliers_ids') || []);
+    return Array.isArray(saved) ? saved.filter((s) => !deleted.has(String(s.id))) : [];
   });
 
   // 5. EXCHANGE RATE STATE (USD to UZS Rate, default 12800)
@@ -184,6 +191,9 @@ export function AppProvider({ children }) {
         storage.set('debtors', []);
         storage.set('sales', []);
         storage.set('suppliers', []);
+        storage.set('deleted_products_ids', []);
+        storage.set('deleted_suppliers_ids', []);
+        storage.set('deleted_debtors_ids', []);
         return;
       }
 
@@ -193,36 +203,103 @@ export function AppProvider({ children }) {
         return;
       }
 
+      // 1. PRODUCTS REALTIME HANDLING
       if (table === 'products') {
+        if (event.action === 'delete') {
+          const delId = String(event.id || event.old?.id || '').trim();
+          if (delId) {
+            const deletedIds = new Set(storage.get('deleted_products_ids') || []);
+            deletedIds.add(delId);
+            storage.set('deleted_products_ids', Array.from(deletedIds));
+
+            setProducts((prev) => prev.filter((p) => String(p.id) !== delId));
+            const local = (storage.get('products') || []).filter((p) => String(p.id) !== delId);
+            storage.set('products', local);
+          }
+          return;
+        }
+
+        // For adds or updates from other devices:
         fetchTableFromCloud('products').then((res) => {
           if (res.success) {
-            const cleaned = res.data.map((p) => cleanProduct(p, exchangeRate));
-            setProducts(cleaned);
-            storage.set('products', cleaned);
+            const deletedProductIds = new Set(storage.get('deleted_products_ids') || []);
+            const valid = res.data
+              .filter((p) => !deletedProductIds.has(String(p.id)) && !String(p.id).startsWith('prod-'))
+              .map((p) => cleanProduct(p, exchangeRate));
+            setProducts(valid);
+            storage.set('products', valid);
           }
         });
-      } else if (table === 'debtors') {
+        return;
+      }
+
+      // 2. SUPPLIERS REALTIME HANDLING
+      if (table === 'suppliers') {
+        if (event.action === 'delete') {
+          const delId = String(event.id || event.old?.id || '').trim();
+          if (delId) {
+            const deletedIds = new Set(storage.get('deleted_suppliers_ids') || []);
+            deletedIds.add(delId);
+            storage.set('deleted_suppliers_ids', Array.from(deletedIds));
+
+            setSuppliers((prev) => prev.filter((s) => String(s.id) !== delId));
+            const local = (storage.get('suppliers') || []).filter((s) => String(s.id) !== delId);
+            storage.set('suppliers', local);
+          }
+          return;
+        }
+
+        fetchTableFromCloud('suppliers').then((res) => {
+          if (res.success) {
+            const deletedSupplierIds = new Set(storage.get('deleted_suppliers_ids') || []);
+            const valid = res.data.filter((s) => !deletedSupplierIds.has(String(s.id)));
+            setSuppliers(valid);
+            storage.set('suppliers', valid);
+          }
+        });
+        return;
+      }
+
+      // 3. DEBTORS REALTIME HANDLING
+      if (table === 'debtors') {
+        if (event.action === 'delete') {
+          const delId = String(event.id || event.old?.id || '').trim();
+          if (delId) {
+            const deletedIds = new Set(storage.get('deleted_debtors_ids') || []);
+            deletedIds.add(delId);
+            storage.set('deleted_debtors_ids', Array.from(deletedIds));
+
+            setDebtors((prev) => prev.filter((d) => String(d.id) !== delId));
+            const local = (storage.get('debtors') || []).filter((d) => String(d.id) !== delId);
+            storage.set('debtors', local);
+          }
+          return;
+        }
+
         fetchTableFromCloud('debtors').then((res) => {
           if (res.success) {
-            setDebtors(res.data);
-            storage.set('debtors', res.data);
+            const deletedDebtorIds = new Set(storage.get('deleted_debtors_ids') || []);
+            const valid = res.data.filter((d) => !deletedDebtorIds.has(String(d.id)));
+            setDebtors(valid);
+            storage.set('debtors', valid);
           }
         });
-      } else if (table === 'sales') {
+        return;
+      }
+
+      // 4. SALES REALTIME HANDLING
+      if (table === 'sales') {
         fetchTableFromCloud('sales').then((res) => {
           if (res.success) {
             setSales(res.data);
             storage.set('sales', res.data);
           }
         });
-      } else if (table === 'suppliers') {
-        fetchTableFromCloud('suppliers').then((res) => {
-          if (res.success) {
-            setSuppliers(res.data);
-            storage.set('suppliers', res.data);
-          }
-        });
-      } else if (table === 'settings') {
+        return;
+      }
+
+      // 5. SETTINGS REALTIME HANDLING
+      if (table === 'settings') {
         fetchCloudExchangeRate().then((rate) => {
           if (rate && Number(rate) > 0) {
             setExchangeRate(Number(rate));
@@ -389,17 +466,18 @@ export function AppProvider({ children }) {
   };
 
   const deleteSupplier = async (id) => {
-    const updated = suppliers.filter((s) => s.id !== id);
+    const cleanId = String(id).trim();
+    const updated = suppliers.filter((s) => String(s.id).trim() !== cleanId);
     setSuppliers(updated);
     storage.set('suppliers', updated);
 
     // Track in deleted_suppliers_ids blacklist in localStorage
     const deletedIds = new Set(storage.get('deleted_suppliers_ids') || []);
-    deletedIds.add(String(id));
+    deletedIds.add(cleanId);
     storage.set('deleted_suppliers_ids', Array.from(deletedIds));
 
     if (isSupabaseConnected()) {
-      await deleteRecordFromCloud('suppliers', id);
+      await deleteRecordFromCloud('suppliers', cleanId);
       try {
         const client = getSupabase();
         if (client) {
@@ -412,7 +490,7 @@ export function AppProvider({ children }) {
           ], { onConflict: 'id' });
         }
       } catch (_) {}
-      broadcastDbChange({ table: 'suppliers', action: 'delete', id });
+      broadcastDbChange({ table: 'suppliers', action: 'delete', id: cleanId });
     }
   };
 
@@ -618,24 +696,28 @@ export function AppProvider({ children }) {
   };
 
   const deleteProduct = async (id) => {
-    const prodToDelete = products.find((p) => p.id === id);
-    const updated = products.filter((p) => p.id !== id);
+    const cleanId = String(id).trim();
+    const prodToDelete = products.find((p) => String(p.id).trim() === cleanId);
+    const updated = products.filter((p) => String(p.id).trim() !== cleanId);
     setProducts(updated);
     storage.set('products', updated);
 
     // Track in deleted_products_ids blacklist in localStorage
     const deletedIds = new Set(storage.get('deleted_products_ids') || []);
-    deletedIds.add(String(id));
+    deletedIds.add(cleanId);
     storage.set('deleted_products_ids', Array.from(deletedIds));
 
     if (isSupabaseConnected()) {
-      await deleteRecordFromCloud('products', id);
-      broadcastDbChange({ table: 'products', action: 'delete', id });
+      const res = await deleteRecordFromCloud('products', cleanId);
+      if (res && res.error) {
+        console.error('Failed to delete product from Supabase:', res.error);
+      }
+      broadcastDbChange({ table: 'products', action: 'delete', id: cleanId });
     }
 
     // Deduct remaining stock load from supplier if product had a supplier
     if (prodToDelete && prodToDelete.supplierId) {
-      const sup = suppliers.find((s) => s.id === prodToDelete.supplierId);
+      const sup = suppliers.find((s) => String(s.id).trim() === String(prodToDelete.supplierId).trim());
       if (sup) {
         const isUSD = sup.currency === 'USD';
         const qty = Number(prodToDelete.quantity) || 0;
@@ -658,7 +740,7 @@ export function AppProvider({ children }) {
           const newTotalPaid = Math.max(0, Number(((sup.totalPaid || 0) - paidDeduct).toFixed(2)));
 
           const updatedSuppliers = suppliers.map((s) => {
-            if (s.id === sup.id) {
+            if (String(s.id).trim() === String(sup.id).trim()) {
               return {
                 ...s,
                 totalPurchased: newTotalPurchased,
