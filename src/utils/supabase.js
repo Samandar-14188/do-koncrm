@@ -79,20 +79,6 @@ export async function fetchTableFromCloud(tableName) {
       .select('*')
       .order('updated_at', { ascending: false });
 
-    // Fallback for suppliers if table has an issue in schema cache
-    if (tableName === 'suppliers' && (error || !data)) {
-      try {
-        const res = await supabaseClient
-          .from('settings')
-          .select('*')
-          .eq('id', 'store_suppliers')
-          .maybeSingle();
-        if (res.data && Array.isArray(res.data.data)) {
-          return { success: true, data: res.data.data, error: null };
-        }
-      } catch (_) {}
-    }
-
     if (error) {
       console.warn(`Fetch ${tableName} error:`, error.message);
       return { success: false, data: [], error: error.message };
@@ -129,20 +115,6 @@ export async function saveRecordToCloud(tableName, record) {
       .from(tableName)
       .upsert([row], { onConflict: 'id' });
 
-    // For suppliers, backup to settings table too
-    if (tableName === 'suppliers') {
-      try {
-        const allSuppliers = storage.get('suppliers') || [record];
-        await supabaseClient.from('settings').upsert([
-          {
-            id: 'store_suppliers',
-            data: allSuppliers,
-            updated_at: new Date().toISOString(),
-          },
-        ], { onConflict: 'id' });
-      } catch (_) {}
-    }
-
     if (error) console.error(`saveRecordToCloud ${tableName} error:`, error);
     return { data, error };
   } catch (e) {
@@ -170,19 +142,6 @@ export async function deleteRecordFromCloud(tableName, recordId) {
       return { success: false, error: error.message };
     }
 
-    if (tableName === 'suppliers') {
-      try {
-        const remainingSuppliers = (storage.get('suppliers') || []).filter((s) => String(s.id).trim() !== strId);
-        await supabaseClient.from('settings').upsert([
-          {
-            id: 'store_suppliers',
-            data: remainingSuppliers,
-            updated_at: new Date().toISOString(),
-          },
-        ], { onConflict: 'id' });
-      } catch (_) {}
-    }
-
     return { success: true, count, data };
   } catch (e) {
     console.error(`deleteRecordFromCloud ${tableName} error:`, e);
@@ -191,7 +150,7 @@ export async function deleteRecordFromCloud(tableName, recordId) {
 }
 
 // -------------------------------------------------------------
-// Sync multiple records to cloud (batch upsert)
+// Sync multiple records to cloud (batch upsert - ONLY for backup restore)
 // -------------------------------------------------------------
 export async function syncToCloud(tableName, records) {
   if (!supabaseClient) autoInitSupabase();
@@ -212,20 +171,7 @@ export async function syncToCloud(tableName, records) {
       .from(tableName)
       .upsert(rows, { onConflict: 'id' });
 
-    // For suppliers, also backup to settings table for seamless fallback
-    if (tableName === 'suppliers') {
-      try {
-        await supabaseClient.from('settings').upsert([
-          {
-            id: 'store_suppliers',
-            data: records,
-            updated_at: new Date().toISOString(),
-          },
-        ], { onConflict: 'id' });
-      } catch (_) {}
-    }
-
-    if (error && tableName !== 'suppliers') {
+    if (error) {
       console.error(`Sync to ${tableName} error:`, error);
     }
     return { data, error };
@@ -427,7 +373,7 @@ export function initRealtimeSync(onEvent) {
             action: payload.eventType === 'DELETE' ? 'delete' : (payload.eventType === 'INSERT' ? 'add' : 'update'),
             eventType: payload.eventType,
             id: payload.old?.id || payload.new?.id,
-            record: payload.new,
+            record: payload.new?.data || payload.new,
             old: payload.old,
           });
         }

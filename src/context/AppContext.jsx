@@ -219,7 +219,30 @@ export function AppProvider({ children }) {
           return;
         }
 
-        // For adds or updates from other devices:
+        if (event.action === 'add' && event.record) {
+          const clean = cleanProduct(event.record, exchangeRate);
+          setProducts((prev) => {
+            const exists = prev.some((p) => String(p.id) === String(clean.id));
+            const updated = exists
+              ? prev.map((p) => (String(p.id) === String(clean.id) ? clean : p))
+              : [clean, ...prev];
+            storage.set('products', updated);
+            return updated;
+          });
+          return;
+        }
+
+        if (event.action === 'update' && event.record) {
+          const clean = cleanProduct(event.record, exchangeRate);
+          setProducts((prev) => {
+            const updated = prev.map((p) => (String(p.id) === String(clean.id) ? clean : p));
+            storage.set('products', updated);
+            return updated;
+          });
+          return;
+        }
+
+        // Fallback or batch change: fetch table from cloud
         fetchTableFromCloud('products').then((res) => {
           if (res.success) {
             const deletedProductIds = new Set(storage.get('deleted_products_ids') || []);
@@ -246,6 +269,27 @@ export function AppProvider({ children }) {
             const local = (storage.get('suppliers') || []).filter((s) => String(s.id) !== delId);
             storage.set('suppliers', local);
           }
+          return;
+        }
+
+        if (event.action === 'add' && event.record) {
+          setSuppliers((prev) => {
+            const exists = prev.some((s) => String(s.id) === String(event.record.id));
+            const updated = exists
+              ? prev.map((s) => (String(s.id) === String(event.record.id) ? event.record : s))
+              : [...prev, event.record];
+            storage.set('suppliers', updated);
+            return updated;
+          });
+          return;
+        }
+
+        if (event.action === 'update' && event.record) {
+          setSuppliers((prev) => {
+            const updated = prev.map((s) => (String(s.id) === String(event.record.id) ? event.record : s));
+            storage.set('suppliers', updated);
+            return updated;
+          });
           return;
         }
 
@@ -276,6 +320,27 @@ export function AppProvider({ children }) {
           return;
         }
 
+        if (event.action === 'add' && event.record) {
+          setDebtors((prev) => {
+            const exists = prev.some((d) => String(d.id) === String(event.record.id));
+            const updated = exists
+              ? prev.map((d) => (String(d.id) === String(event.record.id) ? event.record : d))
+              : [event.record, ...prev];
+            storage.set('debtors', updated);
+            return updated;
+          });
+          return;
+        }
+
+        if (event.action === 'update' && event.record) {
+          setDebtors((prev) => {
+            const updated = prev.map((d) => (String(d.id) === String(event.record.id) ? event.record : d));
+            storage.set('debtors', updated);
+            return updated;
+          });
+          return;
+        }
+
         fetchTableFromCloud('debtors').then((res) => {
           if (res.success) {
             const deletedDebtorIds = new Set(storage.get('deleted_debtors_ids') || []);
@@ -289,6 +354,25 @@ export function AppProvider({ children }) {
 
       // 4. SALES REALTIME HANDLING
       if (table === 'sales') {
+        if (event.action === 'add' && event.record) {
+          setSales((prev) => {
+            const exists = prev.some((s) => String(s.id) === String(event.record.id));
+            const updated = exists ? prev : [event.record, ...prev];
+            storage.set('sales', updated);
+            return updated;
+          });
+          return;
+        }
+
+        if (event.action === 'update' && event.record) {
+          setSales((prev) => {
+            const updated = prev.map((s) => (String(s.id) === String(event.record.id) ? event.record : s));
+            storage.set('sales', updated);
+            return updated;
+          });
+          return;
+        }
+
         fetchTableFromCloud('sales').then((res) => {
           if (res.success) {
             setSales(res.data);
@@ -328,50 +412,26 @@ export function AppProvider({ children }) {
     };
   }, [syncAllFromCloud, exchangeRate]);
 
-  // Save helpers (Immediate local write + Supabase sync + Realtime broadcast)
-  const saveProducts = (updated, shouldBroadcast = true) => {
+  // Local state + storage helpers (NEVER batch-push to cloud, prevents resurrection loops)
+  const saveProducts = (updated) => {
     const cleaned = updated.map((p) => cleanProduct(p, exchangeRate));
     setProducts(cleaned);
     storage.set('products', cleaned);
-    if (isSupabaseConnected()) {
-      syncToCloud('products', cleaned);
-      if (shouldBroadcast) {
-        broadcastDbChange({ table: 'products', action: 'sync' });
-      }
-    }
   };
 
-  const saveDebtors = (updated, shouldBroadcast = true) => {
+  const saveDebtors = (updated) => {
     setDebtors(updated);
     storage.set('debtors', updated);
-    if (isSupabaseConnected()) {
-      syncToCloud('debtors', updated);
-      if (shouldBroadcast) {
-        broadcastDbChange({ table: 'debtors', action: 'sync' });
-      }
-    }
   };
 
-  const saveSales = (updated, shouldBroadcast = true) => {
+  const saveSales = (updated) => {
     setSales(updated);
     storage.set('sales', updated);
-    if (isSupabaseConnected()) {
-      syncToCloud('sales', updated);
-      if (shouldBroadcast) {
-        broadcastDbChange({ table: 'sales', action: 'sync' });
-      }
-    }
   };
 
-  const saveSuppliers = (updated, shouldBroadcast = true) => {
+  const saveSuppliers = (updated) => {
     setSuppliers(updated);
     storage.set('suppliers', updated);
-    if (isSupabaseConnected()) {
-      syncToCloud('suppliers', updated);
-      if (shouldBroadcast) {
-        broadcastDbChange({ table: 'suppliers', action: 'sync' });
-      }
-    }
   };
 
   // Update Exchange Rate (USD to UZS)
@@ -478,18 +538,6 @@ export function AppProvider({ children }) {
 
     if (isSupabaseConnected()) {
       await deleteRecordFromCloud('suppliers', cleanId);
-      try {
-        const client = getSupabase();
-        if (client) {
-          await client.from('settings').upsert([
-            {
-              id: 'store_suppliers',
-              data: updated,
-              updated_at: new Date().toISOString(),
-            },
-          ], { onConflict: 'id' });
-        }
-      } catch (_) {}
       broadcastDbChange({ table: 'suppliers', action: 'delete', id: cleanId });
     }
   };
@@ -500,6 +548,7 @@ export function AppProvider({ children }) {
     if (payAmt <= 0) return false;
     const now = new Date().toISOString();
 
+    let updatedSupplierItem = null;
     const updated = suppliers.map((s) => {
       if (s.id === supplierId) {
         const supCurr = s.currency || 'UZS';
@@ -523,17 +572,25 @@ export function AppProvider({ children }) {
           method,
           note: note.trim(),
         };
-        return {
+        updatedSupplierItem = {
           ...s,
           debtBalance: newDebt,
           totalPaid: newPaid,
           payments: [newPayment, ...(s.payments || [])],
           updatedAt: now,
         };
+        return updatedSupplierItem;
       }
       return s;
     });
-    saveSuppliers(updated);
+
+    setSuppliers(updated);
+    storage.set('suppliers', updated);
+
+    if (isSupabaseConnected() && updatedSupplierItem) {
+      saveRecordToCloud('suppliers', updatedSupplierItem);
+      broadcastDbChange({ table: 'suppliers', action: 'update', record: updatedSupplierItem });
+    }
     return true;
   };
 
@@ -603,6 +660,7 @@ export function AppProvider({ children }) {
       const isUSDSupplier = selectedSup?.currency === 'USD';
       const incomingSum = isUSDSupplier ? ((costPriceUSD || (costPrice / exchangeRate)) * qty) : (costPrice * qty);
 
+      let updatedSupplierItem = null;
       const updatedSuppliers = suppliers.map((s) => {
         if (s.id === supplierId) {
           const totalPurchased = (s.totalPurchased || 0) + incomingSum;
@@ -613,17 +671,23 @@ export function AppProvider({ children }) {
           } else {
             totalPaid += incomingSum;
           }
-          return {
+          updatedSupplierItem = {
             ...s,
             totalPurchased,
             debtBalance,
             totalPaid,
             updatedAt: now,
           };
+          return updatedSupplierItem;
         }
         return s;
       });
-      saveSuppliers(updatedSuppliers);
+      setSuppliers(updatedSuppliers);
+      storage.set('suppliers', updatedSuppliers);
+      if (isSupabaseConnected() && updatedSupplierItem) {
+        saveRecordToCloud('suppliers', updatedSupplierItem);
+        broadcastDbChange({ table: 'suppliers', action: 'update', record: updatedSupplierItem });
+      }
     }
 
     return cleanedProduct;
@@ -739,20 +803,28 @@ export function AppProvider({ children }) {
           const paidDeduct = deductAmount - debtDeduct;
           const newTotalPaid = Math.max(0, Number(((sup.totalPaid || 0) - paidDeduct).toFixed(2)));
 
+          let updatedSupplierItem = null;
           const updatedSuppliers = suppliers.map((s) => {
             if (String(s.id).trim() === String(sup.id).trim()) {
-              return {
+              updatedSupplierItem = {
                 ...s,
                 totalPurchased: newTotalPurchased,
                 debtBalance: newDebtBalance,
                 totalPaid: newTotalPaid,
                 updatedAt: now,
               };
+              return updatedSupplierItem;
             }
             return s;
           });
 
-          saveSuppliers(updatedSuppliers);
+          setSuppliers(updatedSuppliers);
+          storage.set('suppliers', updatedSuppliers);
+
+          if (isSupabaseConnected() && updatedSupplierItem) {
+            saveRecordToCloud('suppliers', updatedSupplierItem);
+            broadcastDbChange({ table: 'suppliers', action: 'update', record: updatedSupplierItem });
+          }
         }
       }
     }
@@ -770,6 +842,7 @@ export function AppProvider({ children }) {
     const costCurrency = supplierInfo.costCurrency || 'UZS';
     const sellCurrency = supplierInfo.sellCurrency || 'UZS';
 
+    let restockedItem = null;
     const updated = products.map((p) => {
       if (p.id === id) {
         if (costCurrency === 'USD') {
@@ -801,7 +874,7 @@ export function AppProvider({ children }) {
           targetSupplierName = p.supplierName || '';
         }
 
-        return {
+        restockedItem = {
           ...p,
           quantity: Math.max(0, Number((p.quantity + addQuantity).toFixed(2))),
           costPrice: effectiveCostUZS,
@@ -814,10 +887,18 @@ export function AppProvider({ children }) {
           supplierName: targetSupplierName || p.supplierName || '',
           updatedAt: now,
         };
+        return restockedItem;
       }
       return p;
     });
-    saveProducts(updated);
+
+    setProducts(updated);
+    storage.set('products', updated);
+
+    if (isSupabaseConnected() && restockedItem) {
+      saveRecordToCloud('products', restockedItem);
+      broadcastDbChange({ table: 'products', action: 'update', record: restockedItem });
+    }
 
     // If supplier selected and stock added, update supplier accounting
     if (targetSupplierId && addQuantity > 0 && effectiveCostUZS > 0) {
@@ -827,6 +908,7 @@ export function AppProvider({ children }) {
         ? ((effectiveCostUSD || (effectiveCostUZS / (exchangeRate || 12800))) * addQuantity)
         : (effectiveCostUZS * addQuantity);
 
+      let updatedSupplierItem = null;
       const updatedSuppliers = suppliers.map((s) => {
         if (s.id === targetSupplierId) {
           const totalPurchased = (s.totalPurchased || 0) + incomingSum;
@@ -837,17 +919,25 @@ export function AppProvider({ children }) {
           } else {
             totalPaid += incomingSum;
           }
-          return {
+          updatedSupplierItem = {
             ...s,
             totalPurchased,
             debtBalance,
             totalPaid,
             updatedAt: now,
           };
+          return updatedSupplierItem;
         }
         return s;
       });
-      saveSuppliers(updatedSuppliers);
+
+      setSuppliers(updatedSuppliers);
+      storage.set('suppliers', updatedSuppliers);
+
+      if (isSupabaseConnected() && updatedSupplierItem) {
+        saveRecordToCloud('suppliers', updatedSupplierItem);
+        broadcastDbChange({ table: 'suppliers', action: 'update', record: updatedSupplierItem });
+      }
     }
   };
 
@@ -903,19 +993,30 @@ export function AppProvider({ children }) {
       productStockMap.set(item.productId, (productStockMap.get(item.productId) || 0) + Number(item.quantity));
     });
 
+    const modifiedProducts = [];
     const updatedProducts = products.map((p) => {
       if (productStockMap.has(p.id)) {
         const deductQty = productStockMap.get(p.id);
         const newQty = Math.max(0, Number((p.quantity - deductQty).toFixed(2)));
-        return {
+        const mod = {
           ...p,
           quantity: newQty,
           updatedAt: now,
         };
+        modifiedProducts.push(mod);
+        return mod;
       }
       return p;
     });
-    saveProducts(updatedProducts);
+    setProducts(updatedProducts);
+    storage.set('products', updatedProducts);
+
+    if (isSupabaseConnected()) {
+      for (const modProd of modifiedProducts) {
+        saveRecordToCloud('products', modProd);
+        broadcastDbChange({ table: 'products', action: 'update', record: modProd });
+      }
+    }
 
     // 3. Handle Cumulative Debtor Profile if there is creditAmount > 0
     let finalDebtorId = paymentData.debtorId || null;
@@ -952,21 +1053,25 @@ export function AppProvider({ children }) {
         })),
       };
 
+      let debtorToSave = null;
+      let debtorIsNew = false;
       if (debtor) {
         finalDebtorId = debtor.id;
         updatedDebtorsList = updatedDebtorsList.map((d) => {
           if (d.id === debtor.id) {
-            return {
+            debtorToSave = {
               ...d,
               phone: cleanPhone || d.phone,
               transactions: [creditTx, ...(d.transactions || [])],
             };
+            return debtorToSave;
           }
           return d;
         });
       } else {
         finalDebtorId = generateId();
-        const newDebtor = {
+        debtorIsNew = true;
+        debtorToSave = {
           id: finalDebtorId,
           name: cleanName || "Noma'lum usta",
           phone: cleanPhone,
@@ -974,10 +1079,16 @@ export function AppProvider({ children }) {
           transactions: [creditTx],
           payments: [],
         };
-        updatedDebtorsList = [newDebtor, ...updatedDebtorsList];
+        updatedDebtorsList = [debtorToSave, ...updatedDebtorsList];
       }
 
-      saveDebtors(updatedDebtorsList);
+      setDebtors(updatedDebtorsList);
+      storage.set('debtors', updatedDebtorsList);
+
+      if (isSupabaseConnected() && debtorToSave) {
+        saveRecordToCloud('debtors', debtorToSave);
+        broadcastDbChange({ table: 'debtors', action: debtorIsNew ? 'add' : 'update', record: debtorToSave });
+      }
     }
 
     // 4. Create Sale Record with preserved supplier info
@@ -1017,7 +1128,13 @@ export function AppProvider({ children }) {
     };
 
     const updatedSales = [newSale, ...sales];
-    saveSales(updatedSales);
+    setSales(updatedSales);
+    storage.set('sales', updatedSales);
+
+    if (isSupabaseConnected()) {
+      saveRecordToCloud('sales', newSale);
+      broadcastDbChange({ table: 'sales', action: 'add', record: newSale });
+    }
 
     return newSale;
   };
@@ -1044,18 +1161,27 @@ export function AppProvider({ children }) {
       note: note.trim(),
     };
 
+    let updatedDebtorItem = null;
     const updatedDebtors = debtors.map((d) => {
       if (d.id === debtorId) {
-        return {
+        updatedDebtorItem = {
           ...d,
           payments: [paymentRecord, ...(d.payments || [])],
         };
+        return updatedDebtorItem;
       }
       return d;
     });
-    saveDebtors(updatedDebtors);
+    setDebtors(updatedDebtors);
+    storage.set('debtors', updatedDebtors);
+
+    if (isSupabaseConnected() && updatedDebtorItem) {
+      saveRecordToCloud('debtors', updatedDebtorItem);
+      broadcastDbChange({ table: 'debtors', action: 'update', record: updatedDebtorItem });
+    }
 
     // 2. Attribute proportional profit to the debtor's uncompleted sales
+    const modifiedSales = [];
     let remainingPayToAllocate = payAmount;
     const updatedSales = sales.map((sale) => {
       if (
@@ -1072,7 +1198,7 @@ export function AppProvider({ children }) {
 
         remainingPayToAllocate -= allocateAmount;
 
-        return {
+        const modSale = {
           ...sale,
           realizedProfit: Math.min(sale.totalProfit, sale.realizedProfit + addedProfit),
           debtPayments: [
@@ -1086,11 +1212,21 @@ export function AppProvider({ children }) {
             },
           ],
         };
+        modifiedSales.push(modSale);
+        return modSale;
       }
       return sale;
     });
 
-    saveSales(updatedSales);
+    setSales(updatedSales);
+    storage.set('sales', updatedSales);
+
+    if (isSupabaseConnected()) {
+      for (const ms of modifiedSales) {
+        saveRecordToCloud('sales', ms);
+        broadcastDbChange({ table: 'sales', action: 'update', record: ms });
+      }
+    }
     return true;
   };
 
@@ -1122,18 +1258,29 @@ export function AppProvider({ children }) {
     });
 
     // Restore stock in Ombor
+    const restoredProducts = [];
     const updatedProducts = products.map((p) => {
       if (returnMap.has(p.id)) {
         const retQty = returnMap.get(p.id);
-        return {
+        const restored = {
           ...p,
           quantity: Math.max(0, Number((p.quantity + retQty).toFixed(2))),
           updatedAt: now,
         };
+        restoredProducts.push(restored);
+        return restored;
       }
       return p;
     });
-    saveProducts(updatedProducts);
+    setProducts(updatedProducts);
+    storage.set('products', updatedProducts);
+
+    if (isSupabaseConnected()) {
+      for (const rp of restoredProducts) {
+        saveRecordToCloud('products', rp);
+        broadcastDbChange({ table: 'products', action: 'update', record: rp });
+      }
+    }
 
     // Adjust debtor balance if debt_reduce
     if (refundMethod === 'debt_reduce' && sale.debtorId) {
@@ -1146,16 +1293,24 @@ export function AppProvider({ children }) {
           method: 'return_adjustment',
           note: `Vozvrat bo'yicha qarz kamaytirildi (${sale.saleNumber})`,
         };
+        let updatedDebtorItem = null;
         const updatedDebtors = debtors.map((d) => {
           if (d.id === debtor.id) {
-            return {
+            updatedDebtorItem = {
               ...d,
               payments: [returnCreditAdjustment, ...(d.payments || [])],
             };
+            return updatedDebtorItem;
           }
           return d;
         });
-        saveDebtors(updatedDebtors);
+        setDebtors(updatedDebtors);
+        storage.set('debtors', updatedDebtors);
+
+        if (isSupabaseConnected() && updatedDebtorItem) {
+          saveRecordToCloud('debtors', updatedDebtorItem);
+          broadcastDbChange({ table: 'debtors', action: 'update', record: updatedDebtorItem });
+        }
       }
     }
 
@@ -1241,9 +1396,10 @@ export function AppProvider({ children }) {
     const activeCollectedRatio = activeTotalAmount > 0 ? (activeCollected / activeTotalAmount) : 0;
     const newRealizedProfit = isFullReturn ? 0 : Math.round(activeTotalProfit * activeCollectedRatio);
 
+    let updatedSaleItem = null;
     const updatedSales = sales.map((s) => {
       if (s.id === saleId) {
-        return {
+        updatedSaleItem = {
           ...s,
           items: updatedItems,
           returned: isFullReturn || s.returned,
@@ -1265,11 +1421,18 @@ export function AppProvider({ children }) {
           realizedProfit: newRealizedProfit,
           initialRealizedProfit: newRealizedProfit,
         };
+        return updatedSaleItem;
       }
       return s;
     });
 
-    saveSales(updatedSales);
+    setSales(updatedSales);
+    storage.set('sales', updatedSales);
+
+    if (isSupabaseConnected() && updatedSaleItem) {
+      saveRecordToCloud('sales', updatedSaleItem);
+      broadcastDbChange({ table: 'sales', action: 'update', record: updatedSaleItem });
+    }
     return true;
   };
 
