@@ -545,7 +545,7 @@ export default function Inventory() {
                             : Math.round((p.sellPrice / exchangeRate) * 100) / 100;
                           return (
                             <span className="font-bold text-gray-900 text-sm truncate ml-1 font-mono">
-                              ${formatUSD(pUSD).replace('$', '')} <span className="text-[11px] text-gray-500 font-sans font-normal">({formatUZS(p.sellPrice)})</span>
+                              {formatUSD(pUSD)} <span className="text-[11px] text-gray-500 font-sans font-normal">({formatUZS(p.sellPrice)})</span>
                             </span>
                           );
                         }
@@ -562,7 +562,7 @@ export default function Inventory() {
                         <div className="text-right truncate ml-1">
                           {p.costCurrency === 'USD' ? (
                             <span className="font-bold font-mono">
-                              ${formatUSD(p.costPriceUSD !== undefined ? p.costPriceUSD : (p.costPrice / exchangeRate))}
+                              {formatUSD(p.costPriceUSD !== undefined ? p.costPriceUSD : (p.costPrice / exchangeRate))}
                               <span className="text-[10px] text-gray-500 font-sans ml-1">
                                 ({formatUZS(p.costPrice)})
                               </span>
@@ -830,7 +830,7 @@ export default function Inventory() {
                       <p className="text-[11px] text-purple-600 mt-1 font-mono font-medium">
                         {formData.costCurrency === 'USD'
                           ? `≈ ${formatUZS(Math.round(Number(formData.costPrice) * exchangeRate))} (kurs: 1$ = ${formatUZS(exchangeRate)})`
-                          : `≈ $${formatUSD(Number(formData.costPrice) / exchangeRate)} (kurs: 1$ = ${formatUZS(exchangeRate)})`}
+                          : `≈ ${formatUSD(Number(formData.costPrice) / exchangeRate)} (kurs: 1$ = ${formatUZS(exchangeRate)})`}
                       </p>
                     )}
                   </div>
@@ -891,7 +891,7 @@ export default function Inventory() {
                       <p className="text-[11px] text-blue-600 mt-1 font-mono font-medium">
                         {formData.sellCurrency === 'USD'
                           ? `≈ ${formatUZS(Math.round(Number(formData.sellPrice) * exchangeRate))} (kurs: 1$ = ${formatUZS(exchangeRate)})`
-                          : `≈ $${formatUSD(Number(formData.sellPrice) / exchangeRate)} (kurs: 1$ = ${formatUZS(exchangeRate)})`}
+                          : `≈ ${formatUSD(Number(formData.sellPrice) / exchangeRate)} (kurs: 1$ = ${formatUZS(exchangeRate)})`}
                       </p>
                     )}
                   </div>
@@ -954,7 +954,7 @@ export default function Inventory() {
                     <p className="text-[11px] text-blue-600 mt-1 font-mono font-medium">
                       {formData.sellCurrency === 'USD'
                         ? `≈ ${formatUZS(Math.round(Number(formData.sellPrice) * exchangeRate))} (kurs: 1$ = ${formatUZS(exchangeRate)})`
-                        : `≈ $${formatUSD(Number(formData.sellPrice) / exchangeRate)} (kurs: 1$ = ${formatUZS(exchangeRate)})`}
+                        : `≈ ${formatUSD(Number(formData.sellPrice) / exchangeRate)} (kurs: 1$ = ${formatUZS(exchangeRate)})`}
                     </p>
                   )}
                 </div>
@@ -1162,7 +1162,7 @@ export default function Inventory() {
                     <p className="text-[11px] text-purple-600 mt-1 font-mono font-medium">
                       {restockCostCurrency === 'USD'
                         ? `≈ ${formatUZS(Math.round(Number(restockCost) * exchangeRate))} (kurs: 1$ = ${formatUZS(exchangeRate)})`
-                        : `≈ $${formatUSD(Number(restockCost) / exchangeRate)} (kurs: 1$ = ${formatUZS(exchangeRate)})`}
+                        : `≈ ${formatUSD(Number(restockCost) / exchangeRate)} (kurs: 1$ = ${formatUZS(exchangeRate)})`}
                     </p>
                   )}
                 </div>
@@ -1222,7 +1222,7 @@ export default function Inventory() {
                   <p className="text-[11px] text-blue-600 mt-1 font-mono font-medium">
                     {restockSellCurrency === 'USD'
                       ? `≈ ${formatUZS(Math.round(Number(restockSell) * exchangeRate))} (kurs: 1$ = ${formatUZS(exchangeRate)})`
-                      : `≈ $${formatUSD(Number(restockSell) / exchangeRate)} (kurs: 1$ = ${formatUZS(exchangeRate)})`}
+                      : `≈ ${formatUSD(Number(restockSell) / exchangeRate)} (kurs: 1$ = ${formatUZS(exchangeRate)})`}
                   </p>
                 )}
               </div>

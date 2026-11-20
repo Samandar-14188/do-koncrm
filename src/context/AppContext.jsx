@@ -561,12 +561,7 @@ export function AppProvider({ children }) {
         }
         return s;
       });
-      setSuppliers(updatedSuppliers);
-      storage.set('suppliers', updatedSuppliers);
-      if (isSupabaseConnected()) {
-        syncToCloud('suppliers', updatedSuppliers);
-        broadcastDbChange({ table: 'suppliers', action: 'update' });
-      }
+      saveSuppliers(updatedSuppliers);
     }
 
     return cleanedProduct;
@@ -639,12 +634,55 @@ export function AppProvider({ children }) {
   };
 
   const deleteProduct = (id) => {
+    const prodToDelete = products.find((p) => p.id === id);
     const updated = products.filter((p) => p.id !== id);
     setProducts(updated);
     storage.set('products', updated);
     if (isSupabaseConnected()) {
       deleteRecordFromCloud('products', id);
       broadcastDbChange({ table: 'products', action: 'delete', id });
+    }
+
+    // Deduct remaining stock load from supplier if product had a supplier
+    if (prodToDelete && prodToDelete.supplierId) {
+      const sup = suppliers.find((s) => s.id === prodToDelete.supplierId);
+      if (sup) {
+        const isUSD = sup.currency === 'USD';
+        const qty = Number(prodToDelete.quantity) || 0;
+        let deductAmount = 0;
+        if (isUSD) {
+          const costUSD = prodToDelete.costPriceUSD !== undefined && prodToDelete.costPriceUSD !== null
+            ? Number(prodToDelete.costPriceUSD)
+            : (Number(prodToDelete.costPrice || 0) / (exchangeRate || 12800));
+          deductAmount = costUSD * qty;
+        } else {
+          deductAmount = Number(prodToDelete.costPrice || 0) * qty;
+        }
+
+        if (deductAmount > 0) {
+          const now = new Date().toISOString();
+          const newTotalPurchased = Math.max(0, Number(((sup.totalPurchased || 0) - deductAmount).toFixed(2)));
+          const debtDeduct = Math.min(sup.debtBalance || 0, deductAmount);
+          const newDebtBalance = Math.max(0, Number(((sup.debtBalance || 0) - debtDeduct).toFixed(2)));
+          const paidDeduct = deductAmount - debtDeduct;
+          const newTotalPaid = Math.max(0, Number(((sup.totalPaid || 0) - paidDeduct).toFixed(2)));
+
+          const updatedSuppliers = suppliers.map((s) => {
+            if (s.id === sup.id) {
+              return {
+                ...s,
+                totalPurchased: newTotalPurchased,
+                debtBalance: newDebtBalance,
+                totalPaid: newTotalPaid,
+                updatedAt: now,
+              };
+            }
+            return s;
+          });
+
+          saveSuppliers(updatedSuppliers);
+        }
+      }
     }
   };
 
@@ -713,7 +751,9 @@ export function AppProvider({ children }) {
     if (targetSupplierId && addQuantity > 0 && effectiveCostUZS > 0) {
       const selectedSup = suppliers.find((s) => s.id === targetSupplierId);
       const isUSDSupplier = selectedSup?.currency === 'USD';
-      const incomingSum = isUSDSupplier ? (effectiveCostUSD * addQuantity) : (effectiveCostUZS * addQuantity);
+      const incomingSum = isUSDSupplier
+        ? ((effectiveCostUSD || (effectiveCostUZS / (exchangeRate || 12800))) * addQuantity)
+        : (effectiveCostUZS * addQuantity);
 
       const updatedSuppliers = suppliers.map((s) => {
         if (s.id === targetSupplierId) {
@@ -1244,18 +1284,26 @@ export function AppProvider({ children }) {
 
     // Supplier Analytics
     const supplierAnalytics = suppliers.map((sup) => {
-      let stockCost = 0;
+      const isUSD = sup.currency === 'USD';
+      let stockCostUZS = 0;
+      let stockCostUSD = 0;
       let stockRetail = 0;
+
       products.forEach((p) => {
         if (p.supplierId === sup.id) {
           const q = Number(p.quantity || 0);
-          const cost = p.costCurrency === 'USD' && p.costPriceUSD ? Math.round(p.costPriceUSD * exchangeRate) : (p.costPrice || 0);
-          stockCost += cost * q;
-          stockRetail += (p.sellPrice || 0) * q;
+          const costUZS = p.costCurrency === 'USD' && p.costPriceUSD ? Math.round(Number(p.costPriceUSD) * exchangeRate) : (Number(p.costPrice) || 0);
+          const costUSD = p.costCurrency === 'USD' && p.costPriceUSD ? Number(p.costPriceUSD) : (exchangeRate > 0 ? (costUZS / exchangeRate) : 0);
+          stockCostUZS += costUZS * q;
+          stockCostUSD += costUSD * q;
+          stockRetail += (Number(p.sellPrice) || 0) * q;
         }
       });
 
+      let soldCostUZS = 0;
+      let soldCostUSD = 0;
       let supplierProfit = 0;
+
       sales.forEach((s) => {
         const returnedMap = new Map();
         (s.returnedItems || []).forEach((ri) => {
@@ -1284,18 +1332,42 @@ export function AppProvider({ children }) {
             if (activeQty <= 0) return;
 
             const actualPrice = it.bargainPrice !== undefined ? it.bargainPrice : it.sellPrice;
-            const itemMargin = (actualPrice - (it.costPrice || 0)) * activeQty;
+            const itemCost = Number(it.costPrice || 0);
+            const itemMargin = (actualPrice - itemCost) * activeQty;
             supplierProfit += Math.round(itemMargin * saleRealizedRatio);
+
+            soldCostUZS += itemCost * activeQty;
+            soldCostUSD += exchangeRate > 0 ? ((itemCost / exchangeRate) * activeQty) : 0;
           }
         });
       });
 
+      // Dynamic reconciliation for live recalculation:
+      // Active goods value received from this supplier = remaining warehouse stock + goods already sold
+      const liveActiveGoodsReceived = isUSD ? (stockCostUSD + soldCostUSD) : (stockCostUZS + soldCostUZS);
+
+      const recordedPaid = (sup.payments || []).reduce((sum, pm) => sum + Number(pm.debtDeduction || pm.amount || 0), 0);
+      const totalPaid = Math.max(Number(sup.totalPaid || 0), recordedPaid);
+
+      let dynamicPurchased = Number(sup.totalPurchased || 0);
+      if (dynamicPurchased < liveActiveGoodsReceived) {
+        dynamicPurchased = liveActiveGoodsReceived;
+      }
+      if (dynamicPurchased > liveActiveGoodsReceived + totalPaid) {
+        dynamicPurchased = liveActiveGoodsReceived + totalPaid;
+      }
+
+      const dynamicDebt = Math.max(0, dynamicPurchased - totalPaid);
+
       return {
         ...sup,
-        currency: sup.currency || 'UZS',
-        stockCostValue: stockCost,
-        stockRetailValue: stockRetail,
-        stockCostValueUSD: Math.round((stockCost / exchangeRate) * 100) / 100,
+        currency: isUSD ? 'USD' : 'UZS',
+        totalPurchased: Number(dynamicPurchased.toFixed(2)),
+        totalPaid: Number(totalPaid.toFixed(2)),
+        debtBalance: Number(dynamicDebt.toFixed(2)),
+        stockCostValue: Math.round(stockCostUZS),
+        stockCostValueUSD: Number(stockCostUSD.toFixed(2)),
+        stockRetailValue: Math.round(stockRetail),
         supplierProfit,
       };
     });

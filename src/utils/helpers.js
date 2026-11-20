@@ -11,12 +11,16 @@ export function formatUZS(amount) {
 
 // Format with "$" prefix
 export function formatUSD(amount) {
-  if (amount == null || isNaN(amount)) return '$0';
-  const num = Number(amount);
-  const formatted = num % 1 === 0
-    ? formatMoney(num)
-    : num.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-  return '$' + formatted;
+  if (amount == null) return '$0';
+  const cleanStr = typeof amount === 'string' ? amount.replace(/\$/g, '').trim() : amount;
+  const num = Number(cleanStr);
+  if (isNaN(num)) return '$0';
+  const isNeg = num < 0;
+  const absNum = Math.abs(num);
+  const formatted = absNum % 1 === 0
+    ? formatMoney(absNum)
+    : absNum.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  return (isNeg ? '-$' : '$') + formatted;
 }
 
 // Generate UUID

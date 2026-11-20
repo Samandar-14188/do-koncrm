@@ -58,7 +58,7 @@ export default function Reports() {
   // Get calculated metrics for the selected date range
   const report = useMemo(() => {
     return getReportData(dateRange);
-  }, [getReportData, dateRange]);
+  }, [getReportData, dateRange, products, sales, debtors, suppliers, exchangeRate]);
 
   // Handle Pay Supplier Debt
   const handleOpenPaySupplier = (sup) => {
@@ -406,13 +406,13 @@ export default function Reports() {
                       {hasDebt ? (
                         <div className="text-right">
                           <span className="badge-danger text-[11px] font-bold whitespace-nowrap block">
-                            Qarzimiz: {isUSD ? `$${formatUSD(sup.debtBalance)}` : formatUZS(sup.debtBalance)}
+                            Qarzimiz: {isUSD ? formatUSD(sup.debtBalance) : formatUZS(sup.debtBalance)}
                           </span>
-                          {isUSD && (
-                            <span className="text-[10px] text-gray-500 font-mono mt-0.5 block whitespace-nowrap">
-                              ≈ {formatUZS(sup.debtBalance * exchangeRate)}
-                            </span>
-                          )}
+                          <span className="text-[10px] text-gray-500 font-mono mt-0.5 block whitespace-nowrap">
+                            {isUSD
+                              ? `≈ ${formatUZS(sup.debtBalance * exchangeRate)}`
+                              : `≈ ${formatUSD(exchangeRate > 0 ? sup.debtBalance / exchangeRate : 0)}`}
+                          </span>
                         </div>
                       ) : (
                         <span className="badge-success text-[11px] font-semibold whitespace-nowrap">
@@ -429,13 +429,13 @@ export default function Reports() {
                           {t('supplier_stock_cost')}
                         </span>
                         <p className="font-bold text-purple-800 font-mono mt-1 text-sm truncate">
-                          {formatUZS(sup.stockCostValue)}
+                          {isUSD ? formatUSD(sup.stockCostValueUSD) : formatUZS(sup.stockCostValue)}
                         </p>
-                        {isUSD && (
-                          <p className="text-[10px] text-gray-400 font-mono truncate">
-                            ≈ ${formatUSD(sup.stockCostValueUSD || (sup.stockCostValue / exchangeRate))}
-                          </p>
-                        )}
+                        <p className="text-[10px] text-gray-400 font-mono truncate">
+                          {isUSD
+                            ? `≈ ${formatUZS(sup.stockCostValue)}`
+                            : `≈ ${formatUSD(sup.stockCostValueUSD)}`}
+                        </p>
                       </div>
 
                       {/* 2. Sotuvdan kelgan Sof Foyda */}
@@ -446,6 +446,11 @@ export default function Reports() {
                         <p className={`font-bold font-mono mt-1 text-sm truncate ${sup.supplierProfit < 0 ? 'text-red-600' : 'text-emerald-700'}`}>
                           {sup.supplierProfit > 0 ? `+${formatUZS(sup.supplierProfit)}` : formatUZS(sup.supplierProfit)}
                         </p>
+                        {isUSD && (
+                          <p className="text-[10px] text-gray-400 font-mono truncate">
+                            ≈ {formatUSD(exchangeRate > 0 ? sup.supplierProfit / exchangeRate : 0)}
+                          </p>
+                        )}
                       </div>
 
                       {/* 3. Jami olingan yuk */}
@@ -454,13 +459,13 @@ export default function Reports() {
                           {t('supplier_total_purchased')}
                         </span>
                         <p className="font-bold text-gray-900 font-mono mt-1 text-xs truncate">
-                          {isUSD ? `$${formatUSD(sup.totalPurchased)}` : formatUZS(sup.totalPurchased)}
+                          {isUSD ? formatUSD(sup.totalPurchased) : formatUZS(sup.totalPurchased)}
                         </p>
-                        {isUSD && (
-                          <p className="text-[10px] text-gray-400 font-mono truncate">
-                            ≈ {formatUZS(sup.totalPurchased * exchangeRate)}
-                          </p>
-                        )}
+                        <p className="text-[10px] text-gray-400 font-mono truncate">
+                          {isUSD
+                            ? `≈ ${formatUZS(sup.totalPurchased * exchangeRate)}`
+                            : `≈ ${formatUSD(exchangeRate > 0 ? sup.totalPurchased / exchangeRate : 0)}`}
+                        </p>
                       </div>
 
                       {/* 4. To'langan summa */}
@@ -469,13 +474,13 @@ export default function Reports() {
                           To'langan summa
                         </span>
                         <p className="font-bold text-blue-700 font-mono mt-1 text-xs truncate">
-                          {isUSD ? `$${formatUSD(sup.totalPaid)}` : formatUZS(sup.totalPaid)}
+                          {isUSD ? formatUSD(sup.totalPaid) : formatUZS(sup.totalPaid)}
                         </p>
-                        {isUSD && (
-                          <p className="text-[10px] text-gray-400 font-mono truncate">
-                            ≈ {formatUZS(sup.totalPaid * exchangeRate)}
-                          </p>
-                        )}
+                        <p className="text-[10px] text-gray-400 font-mono truncate">
+                          {isUSD
+                            ? `≈ ${formatUZS(sup.totalPaid * exchangeRate)}`
+                            : `≈ ${formatUSD(exchangeRate > 0 ? sup.totalPaid / exchangeRate : 0)}`}
+                        </p>
                       </div>
                     </div>
                   </div>
@@ -485,8 +490,13 @@ export default function Reports() {
                     <span className="text-[11px] text-gray-500 font-medium">
                       Yetkazib beruvchiga qarz:{' '}
                       <strong className={hasDebt ? 'text-red-600' : 'text-gray-700'}>
-                        {isUSD ? `$${formatUSD(sup.debtBalance)}` : formatUZS(sup.debtBalance)}
+                        {isUSD ? formatUSD(sup.debtBalance) : formatUZS(sup.debtBalance)}
                       </strong>
+                      {hasDebt && (
+                        <span className="text-[10px] text-gray-400 font-mono ml-1">
+                          ({isUSD ? `≈ ${formatUZS(sup.debtBalance * exchangeRate)}` : `≈ ${formatUSD(exchangeRate > 0 ? sup.debtBalance / exchangeRate : 0)}`})
+                        </span>
+                      )}
                     </span>
 
                     <button
@@ -610,8 +620,8 @@ export default function Reports() {
                   Yetkazib beruvchiga qarzimiz:{' '}
                   <span className="font-bold text-red-600 font-mono">
                     {payingSupplier.currency === 'USD'
-                      ? `$${formatUSD(payingSupplier.debtBalance)} (~${formatUZS(payingSupplier.debtBalance * exchangeRate)})`
-                      : formatUZS(payingSupplier.debtBalance)}
+                      ? `${formatUSD(payingSupplier.debtBalance)} (≈ ${formatUZS(payingSupplier.debtBalance * exchangeRate)})`
+                      : `${formatUZS(payingSupplier.debtBalance)} (≈ ${formatUSD(exchangeRate > 0 ? payingSupplier.debtBalance / exchangeRate : 0)})`}
                   </span>
                 </p>
               </div>
@@ -690,7 +700,7 @@ export default function Reports() {
                 {paySupplierAmount && Number(paySupplierAmount) > 0 && payingSupplier.currency !== paySupplierCurrency && (
                   <p className="text-[11px] text-blue-600 mt-1 font-mono font-medium">
                     {payingSupplier.currency === 'USD' && paySupplierCurrency === 'UZS'
-                      ? `≈ $${formatUSD(Number(paySupplierAmount) / exchangeRate)} qarzdan yechiladi (kurs: 1$ = ${formatUZS(exchangeRate)})`
+                      ? `≈ ${formatUSD(Number(paySupplierAmount) / exchangeRate)} qarzdan yechiladi (kurs: 1$ = ${formatUZS(exchangeRate)})`
                       : `≈ ${formatUZS(Math.round(Number(paySupplierAmount) * exchangeRate))} qarzdan yechiladi (kurs: 1$ = ${formatUZS(exchangeRate)})`}
                   </p>
                 )}
@@ -709,7 +719,7 @@ export default function Reports() {
                     }}
                     className="mt-1.5 text-[11px] font-bold text-blue-600 hover:text-blue-800"
                   >
-                    Barcha qarzni kiritish ({payingSupplier.currency === 'USD' ? `$${formatUSD(payingSupplier.debtBalance)}` : formatUZS(payingSupplier.debtBalance)})
+                    Barcha qarzni kiritish ({payingSupplier.currency === 'USD' ? formatUSD(payingSupplier.debtBalance) : formatUZS(payingSupplier.debtBalance)})
                   </button>
                 )}
               </div>
